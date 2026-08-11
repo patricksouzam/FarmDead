@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'">
+<title>Fazenda 3D</title>
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "../node_modules/three/build/three.module.js",
+    "three/addons/": "../node_modules/three/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<div id="hud">
+  <div class="pill">
+    <span class="icon" data-icon="money"></span>
+    <div><p class="label">Dinheiro</p><p id="money-display" class="value">R$ 300</p></div>
+  </div>
+  <div class="pill">
+    <span class="icon" data-icon="water"></span>
+    <div><p class="label">Água</p><p id="water-display" class="value">100 / 100</p></div>
+  </div>
+  <div class="pill">
+    <span class="icon" id="time-icon" data-icon="sun"></span>
+    <div><p class="label">Hora</p><p id="time-display" class="value">06:40</p></div>
+  </div>
+</div>
+
+<div id="crosshair-hint" class="hidden"></div>
+
+<div id="action-progress-container" class="hidden">
+  <div class="action-box">
+    <span id="action-text">Plantando...</span>
+    <div class="bar-track"><div id="action-bar"></div></div>
+  </div>
+</div>
+
+<div id="controls">
+  <button data-tool="plant" id="btn-plant" class="tool-btn active"><span class="icon" data-icon="plant"></span>Plantar</button>
+  <button data-tool="water" id="btn-water" class="tool-btn"><span class="icon" data-icon="water_tool"></span>Regar</button>
+  <button data-tool="harvest" id="btn-harvest" class="tool-btn"><span class="icon" data-icon="harvest"></span>Colher</button>
+  <button data-tool="weed" id="btn-weed" class="tool-btn"><span class="icon" data-icon="weed"></span>Arrancar</button>
+  <button id="btn-shop" class="menu-btn"><span class="icon" data-icon="shop"></span>Loja</button>
+  <button id="btn-upgrades" class="menu-btn"><span class="icon" data-icon="upgrades"></span>Melhorias</button>
+</div>
+
+<div id="dusk-warning" class="hidden">🐺 Anoitecendo! Recolha os animais para o curral.</div>
+
+<div id="shop-modal" class="modal hidden">
+  <div class="modal-panel">
+    <button class="close-btn" data-close="shop-modal"><span class="icon" data-icon="close"></span></button>
+    <h2><span class="icon" data-icon="shop"></span>Loja &amp; Mercado</h2>
+
+    <div class="section">
+      <h3>Comprar Sementes</h3>
+      <div class="seed-grid">
+        <button class="seed-btn" data-seed="Cenoura"><span class="icon seed-icon" data-icon="carrot"></span>Cenoura<br><span>R$ 10</span></button>
+        <button class="seed-btn" data-seed="Milho"><span class="icon seed-icon" data-icon="corn"></span>Milho<br><span>R$ 20</span></button>
+        <button class="seed-btn" data-seed="Abóbora"><span class="icon seed-icon" data-icon="pumpkin"></span>Abóbora<br><span>R$ 35</span></button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Comprar Animais</h3>
+      <div class="seed-grid">
+        <button class="animal-btn" data-animal="Galinha"><span class="icon seed-icon" data-icon="chicken"></span>Galinha<br><span>R$ 60</span></button>
+        <button class="animal-btn" data-animal="Vaca"><span class="icon seed-icon" data-icon="cow"></span>Vaca<br><span>R$ 180</span></button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Inventário e Vendas</h3>
+      <div id="inventory-list"></div>
+    </div>
+
+    <div class="water-refill">
+      <span>Recarregar Água (R$ 10)</span>
+      <button id="btn-refill-water">Encher Caixa</button>
+    </div>
+  </div>
+</div>
+
+<div id="upgrades-modal" class="modal hidden">
+  <div class="modal-panel">
+    <button class="close-btn" data-close="upgrades-modal"><span class="icon" data-icon="close"></span></button>
+    <h2><span class="icon" data-icon="upgrades"></span>Expansão &amp; Garagem</h2>
+
+    <div id="goal-card" class="upgrade-card goal-card">
+      <h3>Meta Atual</h3>
+      <p id="goal-description">—</p>
+      <div class="upgrade-row">
+        <span id="goal-progress">—</span>
+      </div>
+      <p id="goal-hint" class="goal-hint"></p>
+    </div>
+
+    <div class="upgrade-card">
+      <h3>Expandir Fazenda</h3>
+      <p>Aumente o número de blocos de plantio disponíveis.</p>
+      <div class="upgrade-row">
+        <span id="farm-level-text">Nível 1</span>
+        <button id="btn-upgrade-farm">Expandir (R$ 200)</button>
+      </div>
+    </div>
+
+    <div class="upgrade-card">
+      <h3>Melhorar Casa da Fazenda</h3>
+      <p>Reforme a casa para uma versão maior com varanda ampla e mais espaço no curral.</p>
+      <div class="upgrade-row">
+        <span id="house-level-text">Nível 1</span>
+        <button id="btn-upgrade-house">Melhorar (R$ 350)</button>
+      </div>
+    </div>
+
+    <div class="upgrade-card">
+      <h3>Comprar Picape</h3>
+      <p>Adicione um veículo na entrada da fazenda e ganhe bônus de venda ao completar metas.</p>
+      <div class="upgrade-row">
+        <span id="car-status-text">Não adquirido</span>
+        <button id="btn-buy-car">Comprar (R$ 600)</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="notification"><div id="notif-text">Aviso</div></div>
+
+<canvas id="game-canvas"></canvas>
+
+<script type="module">
+  import { svgIcon } from './icons/icons.js';
+  document.querySelectorAll('[data-icon]').forEach(el => {
+    el.innerHTML = svgIcon(el.dataset.icon);
+  });
+</script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

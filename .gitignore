@@ -1,0 +1,7 @@
+node_modules/
+dist/
+out/
+build/
+electron-test-extract/
+*.log
+.claude/

@@ -1,0 +1,30 @@
+{
+  "name": "fazenda-3d",
+  "version": "1.0.0",
+  "description": "Jogo de fazenda 3D low poly para PC",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^32.3.3",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.fazenda3d.app",
+    "productName": "Fazenda 3D",
+    "win": {
+      "target": "nsis"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*"
+    ]
+  },
+  "dependencies": {
+    "three": "^0.185.1"
+  }
+}
