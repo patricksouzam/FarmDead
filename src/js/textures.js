@@ -30,12 +30,12 @@ function noise(ctx, size, count, colorFn, radiusRange) {
 
 export function makeGrassTexture() {
   return canvasTexture(256, (ctx, s) => {
-    ctx.fillStyle = '#4a9c34';
+    ctx.fillStyle = '#4bc22e';
     ctx.fillRect(0, 0, s, s);
     // manchas grandes de variação de tom para quebrar a repetição do tile
-    noise(ctx, s, 40, () => `rgba(${40 + Math.random()*30|0},${110 + Math.random()*40|0},${30 + Math.random()*20|0},0.25)`, [s*0.06, s*0.14]);
-    noise(ctx, s, 900, () => `rgba(${60 + Math.random()*40|0},${140 + Math.random()*50|0},${40 + Math.random()*30|0},0.5)`);
-    noise(ctx, s, 400, () => `rgba(${30 + Math.random()*30|0},${100 + Math.random()*30|0},${30 + Math.random()*20|0},0.4)`);
+    noise(ctx, s, 40, () => `rgba(${50 + Math.random()*30|0},${150 + Math.random()*30|0},${35 + Math.random()*20|0},0.15)`, [s*0.06, s*0.14]);
+    noise(ctx, s, 900, () => `rgba(${70 + Math.random()*40|0},${170 + Math.random()*40|0},${45 + Math.random()*25|0},0.3)`);
+    noise(ctx, s, 400, () => `rgba(${40 + Math.random()*30|0},${130 + Math.random()*25|0},${35 + Math.random()*15|0},0.25)`);
     // tufos de grama mais claros e pontas de palha seca
     for (let i = 0; i < 260; i++) {
       const x = Math.random() * s, y = Math.random() * s;
@@ -117,9 +117,12 @@ export function makeWoodTexture() {
   });
 }
 
+// Textura neutra (tons de cinza) para que `texMat({ color })` tinja o telhado
+// com a cor desejada por multiplicação, em vez de ficar presa ao vermelho —
+// usada tanto no telhado vermelho da casa quanto no cinza-azulado do celeiro/moinho.
 export function makeRoofTexture() {
   return canvasTexture(256, (ctx, s) => {
-    ctx.fillStyle = '#8a2c22';
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, s, s);
     const rowH = 20;
     const tileW = 22;
@@ -128,19 +131,20 @@ export function makeRoofTexture() {
       const offset = (row % 2) * (tileW / 2);
       for (let x = -tileW; x < s + tileW; x += tileW) {
         const shade = 0.85 + Math.random() * 0.3;
-        ctx.fillStyle = `rgb(${168 * shade | 0},${50 * shade | 0},${40 * shade | 0})`;
+        const v = 255 * shade | 0;
+        ctx.fillStyle = `rgb(${v},${v},${v})`;
         ctx.beginPath();
         ctx.moveTo(x + offset, y + rowH);
         ctx.quadraticCurveTo(x + offset + tileW / 2, y + rowH * 0.15, x + offset + tileW, y + rowH);
         ctx.closePath();
         ctx.fill();
-        ctx.strokeStyle = 'rgba(60,15,12,0.55)';
+        ctx.strokeStyle = 'rgba(30,30,30,0.55)';
         ctx.lineWidth = 1.2;
         ctx.stroke();
       }
       row++;
     }
-    noise(ctx, s, 150, () => `rgba(${150 + Math.random()*40|0},${40 + Math.random()*20|0},${40 + Math.random()*20|0},0.25)`);
+    noise(ctx, s, 150, () => `rgba(255,255,255,${0.1 + Math.random() * 0.15})`);
   });
 }
 

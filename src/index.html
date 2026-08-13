@@ -29,6 +29,10 @@
     <span class="icon" id="time-icon" data-icon="sun"></span>
     <div><p class="label">Hora</p><p id="time-display" class="value">06:40</p></div>
   </div>
+  <div class="pill">
+    <span class="icon" data-icon="upgrades"></span>
+    <div><p class="label">Estação</p><p id="season-display" class="value">Primavera</p></div>
+  </div>
 </div>
 
 <div id="crosshair-hint" class="hidden"></div>
@@ -49,6 +53,13 @@
   <button id="btn-upgrades" class="menu-btn"><span class="icon" data-icon="upgrades"></span>Melhorias</button>
 </div>
 
+<div id="speed-controls">
+  <button data-speed="0" id="btn-speed-pause" class="speed-btn">⏸</button>
+  <button data-speed="1" id="btn-speed-1" class="speed-btn active">1x</button>
+  <button data-speed="2" id="btn-speed-2" class="speed-btn">2x</button>
+  <button data-speed="3" id="btn-speed-3" class="speed-btn">3x</button>
+</div>
+
 <div id="dusk-warning" class="hidden">🐺 Anoitecendo! Recolha os animais para o curral.</div>
 
 <div id="shop-modal" class="modal hidden">
@@ -62,6 +73,8 @@
         <button class="seed-btn" data-seed="Cenoura"><span class="icon seed-icon" data-icon="carrot"></span>Cenoura<br><span>R$ 10</span></button>
         <button class="seed-btn" data-seed="Milho"><span class="icon seed-icon" data-icon="corn"></span>Milho<br><span>R$ 20</span></button>
         <button class="seed-btn" data-seed="Abóbora"><span class="icon seed-icon" data-icon="pumpkin"></span>Abóbora<br><span>R$ 35</span></button>
+        <button class="seed-btn" data-seed="Trigo"><span class="icon seed-icon" data-icon="wheat"></span>Trigo<br><span>R$ 8</span></button>
+        <button class="seed-btn" data-seed="Beterraba"><span class="icon seed-icon" data-icon="beet"></span>Beterraba<br><span>R$ 50</span></button>
       </div>
     </div>
 
@@ -70,6 +83,7 @@
       <div class="seed-grid">
         <button class="animal-btn" data-animal="Galinha"><span class="icon seed-icon" data-icon="chicken"></span>Galinha<br><span>R$ 60</span></button>
         <button class="animal-btn" data-animal="Vaca"><span class="icon seed-icon" data-icon="cow"></span>Vaca<br><span>R$ 180</span></button>
+        <button class="animal-btn" data-animal="Ovelha"><span class="icon seed-icon" data-icon="sheep"></span>Ovelha<br><span>R$ 130</span></button>
       </div>
     </div>
 
@@ -82,6 +96,12 @@
       <span>Recarregar Água (R$ 10)</span>
       <button id="btn-refill-water">Encher Caixa</button>
     </div>
+
+    <div class="water-refill">
+      <span><span class="icon" style="width:20px;height:20px;" data-icon="fertilizer"></span> Fertilizante (R$ 25)</span>
+      <button id="btn-buy-fertilizer">Comprar</button>
+    </div>
+    <p id="fertilizer-count-text" class="goal-hint" style="margin-top:6px;">Em estoque: 0</p>
   </div>
 </div>
 
@@ -91,7 +111,7 @@
     <h2><span class="icon" data-icon="upgrades"></span>Expansão &amp; Garagem</h2>
 
     <div id="goal-card" class="upgrade-card goal-card">
-      <h3>Meta Atual</h3>
+      <h3 id="goal-title">Meta Atual</h3>
       <p id="goal-description">—</p>
       <div class="upgrade-row">
         <span id="goal-progress">—</span>
@@ -124,6 +144,35 @@
         <span id="car-status-text">Não adquirido</span>
         <button id="btn-buy-car">Comprar (R$ 600)</button>
       </div>
+    </div>
+
+    <div class="upgrade-card">
+      <h3>Construir Poço</h3>
+      <p>Aumente permanentemente a capacidade máxima da caixa d'água.</p>
+      <div class="upgrade-row">
+        <span id="well-status-text">Água máx: 100</span>
+        <button id="btn-buy-well">Construir (R$ 250)</button>
+      </div>
+    </div>
+
+    <div class="upgrade-card">
+      <h3><span class="icon" style="width:18px;height:18px;" data-icon="gov"></span> Poço Artesiano</h3>
+      <p>Perfuração profunda para água em grande escala — exige outorga do governo antes de construir.</p>
+      <div class="upgrade-row">
+        <span id="artesian-well-status-text">Requer autorização do Fiscal Aurélio</span>
+        <button id="btn-buy-artesian-well">Autorização pendente</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="dialogue-panel" class="hidden">
+  <div class="dialogue-box">
+    <p id="dialogue-speaker" class="dialogue-speaker">—</p>
+    <p id="dialogue-text">—</p>
+    <div class="dialogue-actions">
+      <button id="dialogue-action" class="hidden">Ação</button>
+      <button id="dialogue-close">Fechar</button>
     </div>
   </div>
 </div>

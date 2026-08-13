@@ -199,6 +199,75 @@ export const icons = {
   <path d="M12 21C12 21 11.7 9.5 12 5C12.3 9.5 12 21 12 21Z" fill="#3d4a24"/>
 </svg>`,
 
+  wheat: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12 3V21" stroke="#c9b64a" stroke-width="1.4" stroke-linecap="round"/>
+  <g fill="#e0c848">
+    <ellipse cx="9.5" cy="6" rx="1.6" ry="1" transform="rotate(-30 9.5 6)"/>
+    <ellipse cx="14.5" cy="6" rx="1.6" ry="1" transform="rotate(30 14.5 6)"/>
+    <ellipse cx="9" cy="9.5" rx="1.7" ry="1.05" transform="rotate(-30 9 9.5)"/>
+    <ellipse cx="15" cy="9.5" rx="1.7" ry="1.05" transform="rotate(30 15 9.5)"/>
+    <ellipse cx="8.6" cy="13" rx="1.8" ry="1.1" transform="rotate(-30 8.6 13)"/>
+    <ellipse cx="15.4" cy="13" rx="1.8" ry="1.1" transform="rotate(30 15.4 13)"/>
+  </g>
+  <circle cx="12" cy="4" r="1" fill="#e0c848"/>
+</svg>`,
+
+  beet: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <path d="M9 5C9 5 8.3 3 9.3 2.3C9.8 3 9.8 4 9.4 4.8" stroke="#7bb04a" stroke-width="1.1" fill="none" stroke-linecap="round"/>
+  <path d="M13 5C13 5 12.6 3 13.8 2.3C14.1 3.1 14 4 13.5 4.7" stroke="#7bb04a" stroke-width="1.1" fill="none" stroke-linecap="round"/>
+  <path d="M6.5 7C6.5 7 7 5.3 8.5 5.6" stroke="#a8304a" stroke-width="1" fill="none" stroke-linecap="round"/>
+  <path d="M15.5 7C15.5 7 15 5.3 13.5 5.6" stroke="#a8304a" stroke-width="1" fill="none" stroke-linecap="round"/>
+  <ellipse cx="11" cy="14" rx="6.4" ry="6.6" fill="#8a2050"/>
+  <path d="M9.5 20.3C9.5 20.3 8.8 16 11 14C13.2 16 12.5 20.3 12.5 20.3" stroke="#6a1440" stroke-width="1" fill="none"/>
+</svg>`,
+
+  sheep: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <ellipse cx="10" cy="12" rx="7.5" ry="5.6" fill="#f5f2e8"/>
+  <circle cx="6" cy="9" r="2.6" fill="#f5f2e8"/>
+  <circle cx="10" cy="8" r="2.8" fill="#f5f2e8"/>
+  <circle cx="14" cy="9.5" r="2.4" fill="#f5f2e8"/>
+  <rect x="16.5" y="9.5" width="4.5" height="4.2" rx="1.4" fill="#3a342c"/>
+  <circle cx="19.6" cy="10.9" r="0.5" fill="#000"/>
+  <rect x="5" y="17" width="1.4" height="3" fill="#2b2620"/>
+  <rect x="14" y="17" width="1.4" height="3" fill="#2b2620"/>
+</svg>`,
+
+  wool: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="9" cy="9" r="4" fill="#f5f2e8"/>
+  <circle cx="14.5" cy="8.5" r="3.6" fill="#f5f2e8"/>
+  <circle cx="11.5" cy="13" r="4.4" fill="#f0ece0"/>
+  <circle cx="8" cy="14" r="3.2" fill="#f5f2e8"/>
+  <circle cx="15" cy="14.5" r="3" fill="#f5f2e8"/>
+</svg>`,
+
+  well: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <path d="M4 8L12 3L20 8L17 8L12 5.4L7 8Z" fill="#4d5b66"/>
+  <rect x="5" y="13" width="14" height="7" rx="1" fill="#a3a39a"/>
+  <ellipse cx="12" cy="13" rx="7" ry="1.6" fill="#8a8a80"/>
+  <rect x="11.3" y="8.5" width="1.4" height="5" fill="#8f6038"/>
+  <rect x="9" y="17.5" width="6" height="1.6" fill="#2f8fd8"/>
+</svg>`,
+
+  fertilizer: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <path d="M6 8H18L17 21H7L6 8Z" fill="#6b8f3a"/>
+  <rect x="5.5" y="5" width="13" height="3.4" rx="0.6" fill="#4a7a2a"/>
+  <text x="12" y="15" font-family="Arial, sans-serif" font-size="6.5" font-weight="700" text-anchor="middle" fill="#eaf3c8">NPK</text>
+</svg>`,
+
+  gov: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12 2L20 5.5V11C20 16.2 16.5 20.3 12 22C7.5 20.3 4 16.2 4 11V5.5L12 2Z" fill="#4c5eac"/>
+  <path d="M12 2L20 5.5V11C20 16.2 16.5 20.3 12 22V2Z" fill="#3a4890"/>
+  <circle cx="12" cy="9.5" r="2.6" fill="#f4c04a"/>
+  <path d="M8.3 15.5C8.3 13.2 9.9 11.8 12 11.8C14.1 11.8 15.7 13.2 15.7 15.5C13.9 16.7 10.1 16.7 8.3 15.5Z" fill="#f4c04a"/>
+</svg>`,
+
   wolf: `
 <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
   <path d="M3 14L6 9L9 11L12 8L15 11L18 9L21 14L17 16L12 15L7 16Z" fill="#2b2822"/>

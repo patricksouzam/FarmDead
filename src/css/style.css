@@ -62,6 +62,40 @@ html, body {
 .pill .label { margin: 0; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.7; }
 .pill .value { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: 0.01em; }
 
+/* Speed controls */
+#speed-controls {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 10;
+  display: flex;
+  gap: 6px;
+  background: rgba(255,255,255,0.92);
+  backdrop-filter: blur(10px);
+  padding: 6px;
+  border-radius: 16px;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.5);
+}
+
+.speed-btn {
+  border: none;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 14px;
+  min-width: 38px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  color: #2a2a2a;
+  background: rgba(0,0,0,0.06);
+  transition: transform 0.12s ease, filter 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+
+.speed-btn:hover { filter: brightness(0.96); }
+.speed-btn:active { transform: scale(0.93); }
+.speed-btn.active { background: linear-gradient(160deg, #5fa04a, #3f7a30); color: #fff; box-shadow: 0 0 0 3px #ffffff, 0 0 0 5px #4b8b3b; }
+#btn-speed-pause.active { background: linear-gradient(160deg, #d9534f, #b8342f); box-shadow: 0 0 0 3px #ffffff, 0 0 0 5px #c14440; }
+
 /* Action progress */
 #action-progress-container {
   position: absolute;
@@ -374,6 +408,60 @@ html, body {
 .goal-card h3 { color: #8a6a1a; }
 .goal-card p { color: #6a5320; }
 .goal-hint { font-size: 11px !important; font-style: italic; color: #9a7a3a !important; margin: 6px 0 0 !important; }
+
+/* Dialogue panel (NPCs / falas do fazendeiro) */
+#dialogue-panel {
+  position: absolute;
+  bottom: 110px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 28;
+  width: min(92vw, 480px);
+}
+
+.dialogue-box {
+  background: linear-gradient(165deg, rgba(30, 26, 20, 0.94), rgba(14, 12, 10, 0.94));
+  border: 1px solid rgba(255, 214, 150, 0.25);
+  border-radius: 18px;
+  padding: 16px 20px;
+  color: #f5ecd8;
+  box-shadow: 0 16px 40px rgba(0,0,0,0.45);
+}
+
+.dialogue-speaker {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #ffcf7a;
+}
+
+#dialogue-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.dialogue-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.dialogue-actions button {
+  border: none;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+#dialogue-action { background: linear-gradient(160deg, #5fa04a, #3f7a30); color: #fff; }
+#dialogue-close { background: rgba(255,255,255,0.14); color: #f5ecd8; }
+#dialogue-action:hover, #dialogue-close:hover { filter: brightness(1.1); }
 
 /* Notification */
 #notification {
