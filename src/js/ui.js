@@ -1,22 +1,65 @@
+import { LOW_ENERGY_THRESHOLD, seedCostFor, effectiveSaleBonus, DAYS_PER_SEASON } from './gameState.js';
+import { SEASONS, dayOfSeasonFor } from './seasons.js';
+import { FEED_RECIPE, SNACK_RECIPE, YARN_GIFT_RECIPE } from './crafting.js';
+
 export function updateHUD(state) {
   document.getElementById('money-display').textContent = `R$ ${state.money}`;
   document.getElementById('water-display').textContent = `${state.water} / ${state.maxWater}`;
   const seasonEl = document.getElementById('season-display');
   if (seasonEl) seasonEl.textContent = state.season;
+
+  const seasonDaysEl = document.getElementById('season-days-display');
+  if (seasonDaysEl) {
+    const dayIn = dayOfSeasonFor(state.totalDays);
+    const left = Math.max(1, DAYS_PER_SEASON - dayIn);
+    const idx = SEASONS.indexOf(state.season);
+    const next = SEASONS[(idx + 1) % SEASONS.length];
+    seasonDaysEl.textContent = `${left} dia${left > 1 ? 's' : ''} · depois ${next}`;
+  }
+
+  const energyEl = document.getElementById('energy-display');
+  if (energyEl) {
+    energyEl.textContent = `${state.energy} / ${state.maxEnergy}`;
+    const pill = energyEl.closest('.pill');
+    if (pill) pill.classList.toggle('pill-warning', state.energy <= LOW_ENERGY_THRESHOLD);
+  }
+
+  updateCraftLabels(state);
+}
+
+function updateCraftLabels(state) {
+  const feedText = document.getElementById('feed-count-text');
+  if (feedText) feedText.textContent = `Ração: ${state.feed || 0} · ${FEED_RECIPE.wheatCost}× Trigo`;
+
+  const snackText = document.getElementById('snack-count-text');
+  if (snackText) snackText.textContent = `Lanche (+${SNACK_RECIPE.energyGain} energia) · Leite + Trigo`;
+
+  const yarnText = document.getElementById('yarn-gift-count-text');
+  if (yarnText) {
+    const count = state.products[YARN_GIFT_RECIPE.productKey] || 0;
+    yarnText.textContent = `Presente de lã: ${count} · ${YARN_GIFT_RECIPE.woolCost}× Lã`;
+  }
 }
 
 export function updateInventoryUI(state, onSell, onSellProduct, onSelectSeed) {
   document.querySelectorAll('.seed-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.seed === state.activeSeedType);
+    const type = btn.dataset.seed;
+    if (type && state.seedConfigs[type]) {
+      const priceSpan = btn.querySelector('span:last-child');
+      if (priceSpan) priceSpan.textContent = `R$ ${seedCostFor(state, type)}`;
+    }
   });
 
   const container = document.getElementById('inventory-list');
+  if (!container) return;
   container.innerHTML = '';
+  const bonus = effectiveSaleBonus(state);
 
   for (const type in state.harvested) {
     const count = state.harvested[type];
     const seedCount = state.seeds[type];
-    const sellPrice = state.seedConfigs[type].sell;
+    const sellPrice = Math.round(state.seedConfigs[type].sell * (1 + bonus));
     const isActive = type === state.activeSeedType;
 
     const row = document.createElement('div');
@@ -36,24 +79,118 @@ export function updateInventoryUI(state, onSell, onSellProduct, onSelectSeed) {
     container.appendChild(row);
   }
 
-  if (!onSellProduct) return;
+  const feedRow = document.createElement('div');
+  feedRow.className = 'inv-row';
+  feedRow.innerHTML = `
+    <div>
+      <strong>Ração</strong><br>
+      <span class="inv-row-meta">Em estoque: ${state.feed || 0} — botão Ração + E no animal</span>
+    </div>`;
+  container.appendChild(feedRow);
+
+  if (!onSellProduct) {
+    updateCraftLabels(state);
+    return;
+  }
   for (const type in state.products) {
     const count = state.products[type];
     const animalType = Object.keys(state.animalConfigs).find(a => state.animalConfigs[a].product === type);
-    const basePrice = state.animalConfigs[animalType].sell;
+    const basePrice = animalType
+      ? Math.round(state.animalConfigs[animalType].sell * (1 + bonus))
+      : (type === YARN_GIFT_RECIPE.productKey ? 40 : 10);
 
     const row = document.createElement('div');
     row.className = 'inv-row';
     row.innerHTML = `
       <div>
         <strong>${type}</strong><br>
-        <span style="font-size:11px;color:#5a7a52;">Em estoque: ${count}</span>
+        <span class="inv-row-meta">Em estoque: ${count}</span>
       </div>
       <button ${count === 0 ? 'disabled' : ''}>Vender (R$ ${basePrice})</button>
     `;
     row.querySelector('button').addEventListener('click', () => onSellProduct(type));
     container.appendChild(row);
   }
+
+  if (state.materials) {
+    for (const type of Object.keys(state.materials)) {
+      const count = state.materials[type] || 0;
+      const base = type === 'Minerio' ? 12 : type === 'Carvao' ? 8 : 4;
+      const price = Math.round(base * (1 + bonus));
+      const row = document.createElement('div');
+      row.className = 'inv-row';
+      row.innerHTML = `
+        <div>
+          <strong>${type}</strong><br>
+          <span class="inv-row-meta">Material: ${count}</span>
+        </div>
+        <button ${count === 0 ? 'disabled' : ''}>Vender (R$ ${price})</button>
+      `;
+      row.querySelector('button').addEventListener('click', () => onSellProduct(type));
+      container.appendChild(row);
+    }
+  }
+
+  updateCraftLabels(state);
+}
+
+/** Minimapa 2D — planta da área ativa com marcadores. */
+export function updateMinimap(playerPos, markers, bounds, areaLabel) {
+  const canvas = document.getElementById('minimap');
+  if (!canvas || !playerPos || !bounds) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+  const pad = 6;
+  const mapW = Math.max(0.001, bounds.maxX - bounds.minX);
+  const mapH = Math.max(0.001, bounds.maxZ - bounds.minZ);
+
+  const toXY = (x, z) => ({
+    x: pad + ((x - bounds.minX) / mapW) * (w - pad * 2),
+    y: pad + ((z - bounds.minZ) / mapH) * (h - pad * 2)
+  });
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = 'rgba(28, 48, 28, 0.82)';
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = 'rgba(180, 220, 150, 0.45)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, w - 2, h - 2);
+
+  if (areaLabel) {
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = 'bold 10px sans-serif';
+    ctx.fillText(areaLabel, 8, 14);
+  }
+
+  const drawMark = (pos, color, label) => {
+    if (!pos) return;
+    const p = toXY(pos.x, pos.z);
+    ctx.fillStyle = color;
+    ctx.fillRect(p.x - 3, p.y - 3, 6, 6);
+    if (label) {
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.font = '9px sans-serif';
+      ctx.fillText(label, p.x + 5, p.y + 3);
+    }
+  };
+
+  drawMark(markers.house, '#e8c070', 'Casa');
+  drawMark(markers.village, '#c09060', markers.villageGate ? 'Vila' : 'Praça');
+  drawMark(markers.cave, '#888', 'Caverna');
+  drawMark(markers.lake, '#4ab0e0', 'Lago');
+  drawMark(markers.exit, '#7ec8ff', 'Saída');
+
+  const pp = toXY(playerPos.x, playerPos.z);
+  ctx.fillStyle = '#ff6b4a';
+  ctx.beginPath();
+  ctx.arc(pp.x, pp.y, 4, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+export function updateAreaBadge(label) {
+  const el = document.getElementById('area-badge');
+  if (el) el.textContent = label || 'Fazenda';
 }
 
 export function updateUpgradesUI(state) {
@@ -77,7 +214,7 @@ export function updateUpgradesUI(state) {
   const carStatus = document.getElementById('car-status-text');
   const carBtn = document.getElementById('btn-buy-car');
   if (state.hasCar) {
-    carStatus.textContent = 'Adquirido';
+    carStatus.textContent = 'Adquirido (+10% vendas)';
     carBtn.textContent = 'Adquirido';
     carBtn.disabled = true;
   }
@@ -114,6 +251,32 @@ export function updateUpgradesUI(state) {
 
   const fertilizerText = document.getElementById('fertilizer-count-text');
   if (fertilizerText) fertilizerText.textContent = `Em estoque: ${state.fertilizer}`;
+
+  const flowerBedText = document.getElementById('flowerbed-count-text');
+  if (flowerBedText) flowerBedText.textContent = state.decorations.flowerBeds;
+  const barrelText = document.getElementById('barrel-count-text');
+  if (barrelText) barrelText.textContent = state.decorations.barrels;
+
+  const scarecrowBtn = document.querySelector('[data-decor="scarecrow"]');
+  if (scarecrowBtn && state.decorations.scarecrow) {
+    scarecrowBtn.textContent = 'Adquirido';
+    scarecrowBtn.disabled = true;
+  }
+  const fancyFenceBtn = document.querySelector('[data-decor="fancyFence"]');
+  if (fancyFenceBtn && state.decorations.fancyFence) {
+    fancyFenceBtn.textContent = 'Adquirido';
+    fancyFenceBtn.disabled = true;
+  }
+  const flowerBedBtn = document.querySelector('[data-decor="flowerBeds"]');
+  if (flowerBedBtn && state.decorations.flowerBeds >= 3) {
+    flowerBedBtn.textContent = 'Máximo';
+    flowerBedBtn.disabled = true;
+  }
+  const barrelBtn = document.querySelector('[data-decor="barrels"]');
+  if (barrelBtn && state.decorations.barrels >= 3) {
+    barrelBtn.textContent = 'Máximo';
+    barrelBtn.disabled = true;
+  }
 }
 
 let notifTimeout = null;
@@ -153,10 +316,7 @@ export function setDuskWarning(visible) {
   document.getElementById('dusk-warning').classList.toggle('hidden', !visible);
 }
 
-// Painel de diálogo genérico usado pelo fazendeiro (falas de evento) e pelos
-// NPCs fixos (Mercador/Fornecedora). `onAction` é opcional: quando presente,
-// mostra um botão extra (ex: "Entregar pedido") que o main.js decide o que faz.
-export function showDialogue(speaker, text, { actionLabel = null, onAction = null } = {}) {
+export function showDialogue(speaker, text, { actionLabel = null, onAction = null, giftLabel = null, onGift = null, friendshipInfo = null } = {}) {
   const panel = document.getElementById('dialogue-panel');
   document.getElementById('dialogue-speaker').textContent = speaker;
   document.getElementById('dialogue-text').textContent = text;
@@ -171,6 +331,26 @@ export function showDialogue(speaker, text, { actionLabel = null, onAction = nul
     actionBtn.onclick = null;
   }
 
+  const giftBtn = document.getElementById('dialogue-gift');
+  if (giftLabel && onGift) {
+    giftBtn.textContent = giftLabel;
+    giftBtn.classList.remove('hidden');
+    giftBtn.onclick = () => { onGift(); };
+  } else {
+    giftBtn.classList.add('hidden');
+    giftBtn.onclick = null;
+  }
+
+  const friendshipEl = document.getElementById('dialogue-friendship');
+  if (friendshipInfo) {
+    friendshipEl.textContent = friendshipInfo.nextMilestone
+      ? `Amizade: ${friendshipInfo.points} (próximo marco: ${friendshipInfo.nextMilestone})`
+      : `Amizade: ${friendshipInfo.points} (máxima)`;
+    friendshipEl.classList.remove('hidden');
+  } else {
+    friendshipEl.classList.add('hidden');
+  }
+
   panel.classList.remove('hidden');
 }
 
@@ -180,4 +360,31 @@ export function hideDialogue() {
 
 export function showChapterIntro(goal) {
   showDialogue(`Capítulo ${goal.chapter}: ${goal.title}`, goal.intro);
+}
+
+export function showConfirmDialog({ title = 'Confirmar', message = 'Tem certeza?', confirmLabel = 'Confirmar', danger = true } = {}) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('confirm-modal');
+    const titleEl = document.getElementById('confirm-title');
+    const msgEl = document.getElementById('confirm-message');
+    const okBtn = document.getElementById('confirm-ok');
+    const cancelBtn = document.getElementById('confirm-cancel');
+
+    titleEl.textContent = title;
+    msgEl.textContent = message;
+    okBtn.textContent = confirmLabel;
+    okBtn.classList.toggle('title-btn-danger', danger);
+    okBtn.classList.toggle('title-btn-primary', !danger);
+
+    const cleanup = (result) => {
+      modal.classList.add('hidden');
+      okBtn.onclick = null;
+      cancelBtn.onclick = null;
+      resolve(result);
+    };
+
+    okBtn.onclick = () => cleanup(true);
+    cancelBtn.onclick = () => cleanup(false);
+    modal.classList.remove('hidden');
+  });
 }

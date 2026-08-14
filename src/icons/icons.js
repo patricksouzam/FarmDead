@@ -274,6 +274,72 @@ export const icons = {
   <circle cx="9.5" cy="12" r="0.6" fill="#ffcf3a"/>
   <circle cx="14.5" cy="12" r="0.6" fill="#ffcf3a"/>
   <path d="M12 13.5L10.5 15.5H13.5Z" fill="#4a453c"/>
+</svg>`,
+
+  play: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="12" cy="12" r="10" fill="#4caf50"/>
+  <path d="M9.5 7.5L17 12L9.5 16.5V7.5Z" fill="#ffffff"/>
+</svg>`,
+
+  settings: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12 3.2C12.6 3.2 13.2 3.25 13.7 3.35L14.3 5.6L16.6 4.9L18 6.9L16.7 8.8C17 9.3 17.3 9.9 17.4 10.5L19.6 11.2V13.7L17.4 14.4C17.3 15 17 15.6 16.7 16.1L18 18.1L16.6 20.1L14.3 19.4L13.7 21.65C13.2 21.75 12.6 21.8 12 21.8C11.4 21.8 10.8 21.75 10.3 21.65L9.7 19.4L7.4 20.1L6 18.1L7.3 16.1C7 15.6 6.7 15 6.6 14.4L4.4 13.7V11.2L6.6 10.5C6.7 9.9 7 9.3 7.3 8.8L6 6.9L7.4 4.9L9.7 5.6L10.3 3.35C10.8 3.25 11.4 3.2 12 3.2Z" fill="#5b6788"/>
+  <circle cx="12" cy="12" r="3.4" fill="#c9d2e8"/>
+</svg>`,
+
+  save: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <path d="M4.5 3H16.5L20 6.5V19.5C20 20.3 19.3 21 18.5 21H4.5C3.7 21 3 20.3 3 19.5V4.5C3 3.7 3.7 3 4.5 3Z" fill="#4c5eac"/>
+  <rect x="6" y="3" width="9" height="6" fill="#e8ecf7"/>
+  <rect x="7.5" y="4" width="4" height="4" fill="#8a97c9"/>
+  <rect x="6" y="13" width="12" height="7" fill="#f4f0e6"/>
+  <rect x="8" y="15" width="8" height="1.4" fill="#c9c2a8"/>
+  <rect x="8" y="17.4" width="8" height="1.4" fill="#c9c2a8"/>
+</svg>`,
+
+  audio: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <path d="M4 9H7.5L12 5.5V18.5L7.5 15H4Z" fill="#5b6788"/>
+  <path d="M15.2 8.8C16.4 9.8 17 11.1 17 12.5C17 13.9 16.4 15.2 15.2 16.2" stroke="#7d8aa8" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+  <path d="M17.4 6.3C19.3 7.9 20.3 10.1 20.3 12.5C20.3 14.9 19.3 17.1 17.4 18.7" stroke="#9aa5c2" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+</svg>`,
+
+  energy: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <path d="M13 2L4 14H11L10 22L20 9H13L13 2Z" fill="#f4c04a"/>
+  <path d="M13 2L11 10H15L10 22L11 13H8L13 2Z" fill="#ffdf7a" opacity="0.6"/>
+</svg>`,
+
+  graphics: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <rect x="2.5" y="4" width="19" height="13" rx="1.2" fill="#3a4890"/>
+  <rect x="4" y="5.5" width="16" height="10" fill="#9fd8f5"/>
+  <path d="M4 13L8.5 8.5L12 12L15.5 8.5L20 13V15.5H4Z" fill="#4c5eac"/>
+  <circle cx="16.5" cy="8.5" r="1.3" fill="#f4c04a"/>
+  <rect x="9.5" y="17" width="5" height="2.4" fill="#8a5a35"/>
+  <rect x="7" y="19.4" width="10" height="1.6" rx="0.5" fill="#5b6788"/>
+</svg>`,
+
+  keyboard: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <rect x="2.5" y="6" width="19" height="12" rx="1.5" fill="#5b6788"/>
+  <rect x="4" y="7.5" width="16" height="9" rx="0.8" fill="#7d8aa8"/>
+  <g fill="#c9d2e8">
+    <rect x="5" y="8.5" width="2" height="2" rx="0.3"/>
+    <rect x="7.5" y="8.5" width="2" height="2" rx="0.3"/>
+    <rect x="10" y="8.5" width="2" height="2" rx="0.3"/>
+    <rect x="12.5" y="8.5" width="2" height="2" rx="0.3"/>
+    <rect x="15" y="8.5" width="2" height="2" rx="0.3"/>
+    <rect x="17.5" y="8.5" width="1.5" height="2" rx="0.3"/>
+    <rect x="5" y="11" width="2" height="2" rx="0.3"/>
+    <rect x="7.5" y="11" width="2" height="2" rx="0.3"/>
+    <rect x="10" y="11" width="2" height="2" rx="0.3"/>
+    <rect x="12.5" y="11" width="2" height="2" rx="0.3"/>
+    <rect x="15" y="11" width="2" height="2" rx="0.3"/>
+    <rect x="17.5" y="11" width="1.5" height="2" rx="0.3"/>
+    <rect x="6.5" y="13.5" width="11" height="1.8" rx="0.4"/>
+  </g>
 </svg>`
 };
 

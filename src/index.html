@@ -17,6 +17,7 @@
 <body>
 
 <div id="hud">
+  <canvas id="minimap" width="160" height="160" aria-label="Minimapa do mundo"></canvas>
   <div class="pill">
     <span class="icon" data-icon="money"></span>
     <div><p class="label">Dinheiro</p><p id="money-display" class="value">R$ 300</p></div>
@@ -31,11 +32,21 @@
   </div>
   <div class="pill">
     <span class="icon" data-icon="upgrades"></span>
-    <div><p class="label">Estação</p><p id="season-display" class="value">Primavera</p></div>
+    <div>
+      <p class="label">Estação</p>
+      <p id="season-display" class="value">Primavera</p>
+      <p id="season-days-display" class="subvalue">7 dias · depois Verão</p>
+    </div>
+  </div>
+  <div class="pill">
+    <span class="icon" data-icon="energy"></span>
+    <div><p class="label">Energia</p><p id="energy-display" class="value">100 / 100</p></div>
   </div>
 </div>
 
 <div id="crosshair-hint" class="hidden"></div>
+<div id="area-badge">Fazenda</div>
+<div id="area-fade" aria-hidden="true"></div>
 
 <div id="action-progress-container" class="hidden">
   <div class="action-box">
@@ -49,8 +60,12 @@
   <button data-tool="water" id="btn-water" class="tool-btn"><span class="icon" data-icon="water_tool"></span>Regar</button>
   <button data-tool="harvest" id="btn-harvest" class="tool-btn"><span class="icon" data-icon="harvest"></span>Colher</button>
   <button data-tool="weed" id="btn-weed" class="tool-btn"><span class="icon" data-icon="weed"></span>Arrancar</button>
+  <button id="btn-feed" class="menu-btn" type="button"><span class="icon" data-icon="wheat"></span>Ração</button>
+  <button id="btn-rest" class="menu-btn" type="button"><span class="icon" data-icon="energy"></span>Descansar</button>
+  <button id="btn-inventory" class="menu-btn" type="button"><span class="icon" data-icon="egg"></span>Inventário</button>
   <button id="btn-shop" class="menu-btn"><span class="icon" data-icon="shop"></span>Loja</button>
   <button id="btn-upgrades" class="menu-btn"><span class="icon" data-icon="upgrades"></span>Melhorias</button>
+  <button id="btn-sleep" class="menu-btn"><span class="icon" data-icon="moon"></span>Dormir</button>
 </div>
 
 <div id="speed-controls">
@@ -60,7 +75,7 @@
   <button data-speed="3" id="btn-speed-3" class="speed-btn">3x</button>
 </div>
 
-<div id="dusk-warning" class="hidden">🐺 Anoitecendo! Recolha os animais para o curral.</div>
+<div id="dusk-warning" class="hidden">🐺 Anoitecendo! O sino da vila toca — recolha os animais.</div>
 
 <div id="shop-modal" class="modal hidden">
   <div class="modal-panel">
@@ -88,8 +103,20 @@
     </div>
 
     <div class="section">
-      <h3>Inventário e Vendas</h3>
-      <div id="inventory-list"></div>
+      <h3>Celeiro — Craft</h3>
+      <p class="goal-hint">Craft também perto do celeiro (C / E).</p>
+      <div class="water-refill craft-row">
+        <span id="feed-count-text">Ração: 0 · 3× Trigo</span>
+        <button id="btn-craft-feed">Craftar</button>
+      </div>
+      <div class="water-refill craft-row">
+        <span id="snack-count-text">Lanche: 0 · Leite + Trigo</span>
+        <button id="btn-craft-snack">Craftar</button>
+      </div>
+      <div class="water-refill craft-row">
+        <span id="yarn-gift-count-text">Presente de lã: 0 · 2× Lã</span>
+        <button id="btn-craft-yarn-gift">Craftar</button>
+      </div>
     </div>
 
     <div class="water-refill">
@@ -102,6 +129,17 @@
       <button id="btn-buy-fertilizer">Comprar</button>
     </div>
     <p id="fertilizer-count-text" class="goal-hint" style="margin-top:6px;">Em estoque: 0</p>
+  </div>
+</div>
+
+<div id="inventory-modal" class="modal hidden">
+  <div class="modal-panel">
+    <button class="close-btn" data-close="inventory-modal"><span class="icon" data-icon="close"></span></button>
+    <h2><span class="icon" data-icon="egg"></span>Inventário &amp; Vendas</h2>
+    <div class="section">
+      <h3>Itens</h3>
+      <div id="inventory-list"></div>
+    </div>
   </div>
 </div>
 
@@ -139,7 +177,7 @@
 
     <div class="upgrade-card">
       <h3>Comprar Picape</h3>
-      <p>Adicione um veículo na entrada da fazenda e ganhe bônus de venda ao completar metas.</p>
+      <p>Veículo na entrada da fazenda com +10% permanente em todas as vendas.</p>
       <div class="upgrade-row">
         <span id="car-status-text">Não adquirido</span>
         <button id="btn-buy-car">Comprar (R$ 600)</button>
@@ -163,21 +201,183 @@
         <button id="btn-buy-artesian-well">Autorização pendente</button>
       </div>
     </div>
+
+    <div class="upgrade-card">
+      <h3>Decoração da Fazenda</h3>
+      <p>Enfeitam a propriedade. Espantalho reduz ervas; cerca reforçada reduz risco de lobo.</p>
+      <div class="upgrade-row">
+        <span>Canteiro de flores (<span id="flowerbed-count-text">0</span>/3)</span>
+        <button class="decor-btn" data-decor="flowerBeds">Comprar (R$ 40)</button>
+      </div>
+      <div class="upgrade-row" style="margin-top:8px;">
+        <span>Barril (<span id="barrel-count-text">0</span>/3)</span>
+        <button class="decor-btn" data-decor="barrels">Comprar (R$ 30)</button>
+      </div>
+      <div class="upgrade-row" style="margin-top:8px;">
+        <span id="scarecrow-status-text">Espantalho (−ervas)</span>
+        <button class="decor-btn" data-decor="scarecrow">Comprar (R$ 80)</button>
+      </div>
+      <div class="upgrade-row" style="margin-top:8px;">
+        <span id="fancy-fence-status-text">Cerca reforçada (−lobo)</span>
+        <button class="decor-btn" data-decor="fancyFence">Comprar (R$ 150)</button>
+      </div>
+    </div>
   </div>
 </div>
 
 <div id="dialogue-panel" class="hidden">
   <div class="dialogue-box">
     <p id="dialogue-speaker" class="dialogue-speaker">—</p>
+    <p id="dialogue-friendship" class="dialogue-friendship hidden">—</p>
     <p id="dialogue-text">—</p>
     <div class="dialogue-actions">
+      <button id="dialogue-gift" class="hidden">Dar presente</button>
       <button id="dialogue-action" class="hidden">Ação</button>
       <button id="dialogue-close">Fechar</button>
     </div>
   </div>
 </div>
 
+<div id="gift-modal" class="modal hidden">
+  <div class="modal-panel">
+    <button class="close-btn" data-close="gift-modal"><span class="icon" data-icon="close"></span></button>
+    <h2><span class="icon" data-icon="egg"></span>Dar Presente</h2>
+    <div id="gift-list"></div>
+  </div>
+</div>
+
 <div id="notification"><div id="notif-text">Aviso</div></div>
+
+<div id="title-screen" class="modal">
+  <div class="title-shell">
+    <span class="title-logo-mark">FarmCool</span>
+    <h1 class="title-logo">Fazenda 3D</h1>
+    <p class="title-tagline">Cultive, crie animais e explore a fazenda Cube World.<br>WASD andar · Espaço saltar · E portais (caverna / vila)</p>
+    <div class="title-menu">
+      <button id="btn-new-game" class="title-btn title-btn-primary"><span class="icon" data-icon="play"></span>Novo Jogo</button>
+      <button id="btn-continue" class="title-btn" disabled><span class="icon" data-icon="save"></span>Continuar</button>
+      <button id="btn-title-settings" class="title-btn"><span class="icon" data-icon="settings"></span>Configurações</button>
+    </div>
+    <p class="title-version">v1.2.0</p>
+  </div>
+</div>
+
+<div id="pause-menu" class="modal hidden">
+  <div class="pause-shell">
+    <h2>Pausado</h2>
+    <div class="title-menu">
+      <button id="btn-resume" class="title-btn title-btn-primary">Continuar</button>
+      <button id="btn-pause-save" class="title-btn"><span class="icon" data-icon="save"></span>Salvar / Carregar</button>
+      <button id="btn-pause-settings" class="title-btn"><span class="icon" data-icon="settings"></span>Configurações</button>
+      <button id="btn-quit-to-title" class="title-btn title-btn-danger">Menu Principal</button>
+    </div>
+  </div>
+</div>
+
+<div id="confirm-modal" class="modal hidden">
+  <div class="modal-panel confirm-panel">
+    <h2 id="confirm-title">Confirmar</h2>
+    <p id="confirm-message">Tem certeza?</p>
+    <div class="confirm-actions">
+      <button id="confirm-cancel" class="title-btn">Cancelar</button>
+      <button id="confirm-ok" class="title-btn title-btn-danger">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<div id="settings-modal" class="modal hidden">
+  <div class="modal-panel">
+    <button id="btn-close-settings" class="close-btn"><span class="icon" data-icon="close"></span></button>
+    <h2><span class="icon" data-icon="settings"></span>Configurações</h2>
+
+    <div class="section">
+      <h3><span class="icon" style="width:16px;height:16px;" data-icon="audio"></span> Áudio</h3>
+      <div class="settings-row">
+        <span>Música</span>
+        <input type="range" id="setting-music-volume" min="0" max="100" value="60">
+      </div>
+      <div class="settings-row">
+        <span>Efeitos sonoros</span>
+        <input type="range" id="setting-sfx-volume" min="0" max="100" value="80">
+      </div>
+      <button id="setting-mute" class="settings-btn">Silenciar</button>
+    </div>
+
+    <div class="section">
+      <h3><span class="icon" style="width:16px;height:16px;" data-icon="graphics"></span> Gráficos</h3>
+      <div class="quality-grid">
+        <button class="quality-btn" data-quality="low">Baixa</button>
+        <button class="quality-btn" data-quality="medium">Média</button>
+        <button class="quality-btn active" data-quality="high">Alta</button>
+      </div>
+      <div class="settings-row" style="margin-top:10px;">
+        <span>Sombras</span>
+        <input type="checkbox" id="setting-shadows" checked>
+      </div>
+      <div class="settings-row">
+        <span>Bloom (brilho)</span>
+        <input type="checkbox" id="setting-bloom" checked>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3><span class="icon" style="width:16px;height:16px;" data-icon="keyboard"></span> Controles</h3>
+      <ul class="controls-list">
+        <li>WASD / setas: andar · Shift: correr · Espaço: saltar</li>
+        <li>E na entrada da caverna / portão da vila: viajar entre áreas</li>
+        <li>1–4: ferramentas · clique curto seleciona · segurar = em lote</li>
+        <li>Scroll: zoom da câmera · botão direito/meio: girar</li>
+        <li>E: interagir (canteiro, NPC, animal, celeiro, casa)</li>
+        <li>Saia pelo portão norte da fazenda até a placa da vila (E para entrar)</li>
+        <li>Siga a trilha oeste até a boca da caverna (E para entrar)</li>
+        <li>Ao anoitecer o sino toca sozinho e os moradores se abrigam</li>
+        <li>C: craft no celeiro · R: descansar · F: modo ração</li>
+        <li>ESC: Pausar / Fechar menus</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div id="save-modal" class="modal hidden">
+  <div class="modal-panel">
+    <button class="close-btn" data-close="save-modal"><span class="icon" data-icon="close"></span></button>
+    <h2><span class="icon" data-icon="save"></span>Salvar / Carregar</h2>
+
+    <div class="upgrade-card" data-slot="1">
+      <h3>Slot 1</h3>
+      <p class="save-slot-info">Vazio</p>
+      <div class="upgrade-row save-actions">
+        <button class="save-btn">Salvar</button>
+        <button class="load-btn">Carregar</button>
+        <button class="delete-btn">Apagar</button>
+        <button class="export-btn">Exportar</button>
+        <button class="import-btn">Importar</button>
+      </div>
+    </div>
+    <div class="upgrade-card" data-slot="2">
+      <h3>Slot 2</h3>
+      <p class="save-slot-info">Vazio</p>
+      <div class="upgrade-row save-actions">
+        <button class="save-btn">Salvar</button>
+        <button class="load-btn">Carregar</button>
+        <button class="delete-btn">Apagar</button>
+        <button class="export-btn">Exportar</button>
+        <button class="import-btn">Importar</button>
+      </div>
+    </div>
+    <div class="upgrade-card" data-slot="3">
+      <h3>Slot 3</h3>
+      <p class="save-slot-info">Vazio</p>
+      <div class="upgrade-row save-actions">
+        <button class="save-btn">Salvar</button>
+        <button class="load-btn">Carregar</button>
+        <button class="delete-btn">Apagar</button>
+        <button class="export-btn">Exportar</button>
+        <button class="import-btn">Importar</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <canvas id="game-canvas"></canvas>
 

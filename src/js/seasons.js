@@ -1,14 +1,14 @@
-import { DAYS_PER_SEASON, WOLF_RISK_CHANCE, WOLF_RISK_CHANCE_WINTER } from './gameState.js';
+import { DAYS_PER_SEASON, WOLF_RISK_CHANCE, WOLF_RISK_CHANCE_WINTER, FANCY_FENCE_WOLF_MULT } from './gameState.js';
 
 export const SEASONS = ['Primavera', 'Verão', 'Outono', 'Inverno'];
 
 const GROWTH_MULTIPLIER = { Primavera: 1.1, Verão: 1.0, Outono: 0.85, Inverno: 0.4 };
 
 const SEASON_SKY = {
-  Primavera: { top: 0x2f8fe8, bottom: 0xbfeaff, grass: 0x5cb03e },
-  Verão: { top: 0x1f7fe0, bottom: 0xa9e2ff, grass: 0x5cb03e },
-  Outono: { top: 0x4a7fb0, bottom: 0xd8c496, grass: 0xb08a3a },
-  Inverno: { top: 0x7d94ad, bottom: 0xe8eef2, grass: 0xd8e2e6 }
+  Primavera: { top: 0x2f8fe8, bottom: 0xbfeaff, grass: 0x5cb03e, foliage: 0x4fa83a },
+  Verão: { top: 0x1f7fe0, bottom: 0xa9e2ff, grass: 0x5cb03e, foliage: 0x3d9a2e },
+  Outono: { top: 0x4a7fb0, bottom: 0xd8c496, grass: 0xb08a3a, foliage: 0xc47828 },
+  Inverno: { top: 0x7d94ad, bottom: 0xe8eef2, grass: 0xd8e2e6, foliage: 0x8aa0a8 }
 };
 
 // Determina a estação a partir do total de dias completos de jogo (não do
@@ -31,8 +31,9 @@ export function skyPaletteForSeason(season) {
   return SEASON_SKY[season] || SEASON_SKY.Verão;
 }
 
-export function wolfRiskChanceForSeason(season) {
-  return season === 'Inverno' ? WOLF_RISK_CHANCE_WINTER : WOLF_RISK_CHANCE;
+export function wolfRiskChanceForSeason(season, hasFancyFence = false) {
+  const base = season === 'Inverno' ? WOLF_RISK_CHANCE_WINTER : WOLF_RISK_CHANCE;
+  return hasFancyFence ? base * FANCY_FENCE_WOLF_MULT : base;
 }
 
 export function isPlantableInSeason(seedConfig, season) {

@@ -33,7 +33,8 @@ export function makeGrassTexture() {
     ctx.fillStyle = '#4bc22e';
     ctx.fillRect(0, 0, s, s);
     // manchas grandes de variação de tom para quebrar a repetição do tile
-    noise(ctx, s, 40, () => `rgba(${50 + Math.random()*30|0},${150 + Math.random()*30|0},${35 + Math.random()*20|0},0.15)`, [s*0.06, s*0.14]);
+    noise(ctx, s, 55, () => `rgba(${50 + Math.random()*30|0},${150 + Math.random()*30|0},${35 + Math.random()*20|0},0.18)`, [s*0.06, s*0.16]);
+    noise(ctx, s, 70, () => `rgba(${100 + Math.random()*40|0},${180 + Math.random()*40|0},${50 + Math.random()*25|0},0.12)`, [s*0.08, s*0.18]);
     noise(ctx, s, 900, () => `rgba(${70 + Math.random()*40|0},${170 + Math.random()*40|0},${45 + Math.random()*25|0},0.3)`);
     noise(ctx, s, 400, () => `rgba(${40 + Math.random()*30|0},${130 + Math.random()*25|0},${35 + Math.random()*15|0},0.25)`);
     // tufos de grama mais claros e pontas de palha seca
@@ -55,9 +56,10 @@ export function makeGrassTexture() {
 
 export function makeDirtTexture() {
   return canvasTexture(256, (ctx, s) => {
-    ctx.fillStyle = '#6b4a2e';
+    ctx.fillStyle = '#735232';
     ctx.fillRect(0, 0, s, s);
-    noise(ctx, s, 40, () => `rgba(${50 + Math.random()*30|0},${34 + Math.random()*20|0},${18 + Math.random()*12|0},0.2)`, [s*0.05, s*0.12]);
+    noise(ctx, s, 50, () => `rgba(${50 + Math.random()*30|0},${34 + Math.random()*20|0},${18 + Math.random()*12|0},0.22)`, [s*0.05, s*0.13]);
+    noise(ctx, s, 40, () => `rgba(${140 + Math.random()*30|0},${110 + Math.random()*25|0},${70 + Math.random()*20|0},0.12)`, [s*0.04, s*0.1]);
     noise(ctx, s, 700, () => `rgba(${90 + Math.random()*40|0},${60 + Math.random()*30|0},${35 + Math.random()*20|0},0.55)`);
     noise(ctx, s, 250, () => `rgba(${45 + Math.random()*20|0},${30 + Math.random()*15|0},${15 + Math.random()*10|0},0.5)`);
     // pequenas pedrinhas e detritos para dar textura ao caminho
