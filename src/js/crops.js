@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { makeTilledDirtTexture } from './textures.js';
+import { getGroundHeightAt } from './world.js';
+import { getMap } from './mapLoader.js';
 
 const tilledTexture = makeTilledDirtTexture();
 tilledTexture.repeat.set(1, 1);
@@ -15,16 +17,18 @@ export function rebuildFarmPlots(scene, farmPlots, farmLevel) {
   if (farmLevel === 2) { rows = 5; cols = 6; }
   if (farmLevel === 3) { rows = 6; cols = 7; }
 
-  const spacing = 2.3;
+  const origin = getMap()?.plotOrigin || {};
+  const spacing = origin.spacing ?? 2.3;
   const startX = -((cols - 1) * spacing) / 2;
-  const startZ = -1.0;
+  const startZ = origin.startZ ?? -2.0;
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const group = new THREE.Group();
       const x = startX + c * spacing;
       const z = startZ + r * spacing;
-      group.position.set(x, 0.05, z);
+      const groundY = getGroundHeightAt(x, z, 'farm');
+      group.position.set(x, groundY + 0.05, z);
 
       const plotMesh = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.16, 1.9), plotMat.clone());
       plotMesh.castShadow = true;
@@ -164,11 +168,18 @@ function rootVeggie(height, color, stalkHeight) {
 
 function cornStage() {
   const group = new THREE.Group();
-  group.add(cylinderStalk(1.2, 0x7cb342, 4));
-  const ear = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.35, 0.16), cropMat(0xf0d048, { roughness: 0.5 }));
-  ear.position.set(0.14, 0.85, 0);
-  ear.castShadow = true;
-  group.add(ear);
+  const stalkOffsets = [[0, 0], [-0.18, 0.16], [0.15, -0.17]];
+  stalkOffsets.forEach(([ox, oz], i) => {
+    const height = 1.9 - i * 0.15;
+    const stalk = cylinderStalk(height, 0x7cb342, 4);
+    stalk.position.set(ox, 0, oz);
+    stalk.rotation.y = i * 1.9;
+    group.add(stalk);
+    const ear = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.35, 0.16), cropMat(0xf0d048, { roughness: 0.5 }));
+    ear.position.set(ox + 0.14, height * 0.7, oz);
+    ear.castShadow = true;
+    group.add(ear);
+  });
   return group;
 }
 

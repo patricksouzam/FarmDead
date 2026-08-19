@@ -150,6 +150,16 @@ export function makeRoofTexture() {
   });
 }
 
+export function makeSandTexture() {
+  return canvasTexture(256, (ctx, s) => {
+    ctx.fillStyle = '#dcc98a';
+    ctx.fillRect(0, 0, s, s);
+    noise(ctx, s, 60, () => `rgba(${230 + Math.random()*20|0},${210 + Math.random()*20|0},${150 + Math.random()*20|0},0.2)`, [s*0.05, s*0.12]);
+    noise(ctx, s, 800, () => `rgba(${200 + Math.random()*30|0},${180 + Math.random()*30|0},${120 + Math.random()*25|0},0.35)`);
+    noise(ctx, s, 300, () => `rgba(${160 + Math.random()*30|0},${145 + Math.random()*25|0},${95 + Math.random()*20|0},0.4)`);
+  });
+}
+
 export function makeStoneTexture() {
   return canvasTexture(256, (ctx, s) => {
     ctx.fillStyle = '#8a8a8a';

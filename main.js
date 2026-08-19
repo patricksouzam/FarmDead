@@ -1,6 +1,27 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
+const DEBUG_ENDPOINT = 'http://127.0.0.1:7299/ingest/8bc68156-38f8-493e-9aa8-401dffdaa1b4';
+const DEBUG_SESSION_ID = '9196a3';
+
+function debugLog(hypothesisId, message, data = {}, runId = 'initial') {
+  fetch(DEBUG_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Debug-Session-Id': DEBUG_SESSION_ID
+    },
+    body: JSON.stringify({
+      sessionId: DEBUG_SESSION_ID,
+      runId,
+      hypothesisId,
+      location: 'main.js',
+      message,
+      data,
+      timestamp: Date.now()
+    })
+  }).catch(() => {});
+}
 
 function savesDir() {
   return path.join(app.getPath('userData'), 'saves');
@@ -88,6 +109,11 @@ ipcMain.handle('import-save', async (event, slot) => {
 });
 
 function createWindow() {
+  // #region agent log
+  debugLog('H6', 'electron.createWindow.start', {
+    platform: process.platform
+  });
+  // #endregion
   const win = new BrowserWindow({
     width: 1600,
     height: 900,
@@ -104,10 +130,39 @@ function createWindow() {
     }
   });
 
-  win.loadFile(path.join(__dirname, 'src', 'index.html'));
+  win.webContents.on('did-finish-load', () => {
+    // #region agent log
+    debugLog('H6', 'electron.did-finish-load', {
+      url: win.webContents.getURL()
+    });
+    // #endregion
+  });
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    // #region agent log
+    debugLog('H6', 'electron.did-fail-load', {
+      errorCode,
+      errorDescription,
+      validatedURL
+    });
+    // #endregion
+  });
+  win.webContents.on('render-process-gone', (_event, details) => {
+    // #region agent log
+    debugLog('H7', 'electron.render-process-gone', details || {});
+    // #endregion
+  });
+
+  const htmlPath = path.join(__dirname, 'src', 'index.html');
+  // #region agent log
+  debugLog('H6', 'electron.loadFile.call', { htmlPath });
+  // #endregion
+  win.loadFile(htmlPath);
 }
 
 app.whenReady().then(() => {
+  // #region agent log
+  debugLog('H6', 'electron.app.whenReady');
+  // #endregion
   createWindow();
 
   app.on('activate', () => {
@@ -116,5 +171,8 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  // #region agent log
+  debugLog('H7', 'electron.window-all-closed');
+  // #endregion
   if (process.platform !== 'darwin') app.quit();
 });

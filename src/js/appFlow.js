@@ -5,5 +5,6 @@ export const APP_STATE = {
   TITLE: 'title',
   PLAYING: 'playing',
   PAUSED: 'paused',
-  SETTINGS: 'settings'
+  SETTINGS: 'settings',
+  CAVE_MINIGAME: 'cave_minigame'
 };

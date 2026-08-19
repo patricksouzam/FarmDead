@@ -3,64 +3,50 @@ import {
   getActivePlayBounds,
   CAVE_POSITION,
   VILLAGE_PLAZA,
-  VILLAGE_GATE,
+  LAKE_GATE,
+  LAKE_AREA_CENTER,
   CAVE_EXIT_SPAWN,
-  CAVE_ENTER_SPAWN,
-  VILLAGE_ENTER_SPAWN,
-  FARM_FROM_CAVE_SPAWN,
-  FARM_FROM_VILLAGE_SPAWN
+  HOUSE_POSITION,
+  BASEMENT_ENTER_SPAWN
 } from './world.js';
+import { getMap } from './mapLoader.js';
 
 export const AREA = {
   FARM: 'farm',
   CAVE: 'cave',
-  VILLAGE: 'village'
+  VILLAGE: 'village',
+  LAKE: 'lake',
+  BASEMENT: 'basement'
 };
 
 export const PORTAL_RANGE = 2.6;
 
-/** @type {'farm'|'cave'|'village'} */
+/** @type {'farm'|'cave'|'village'|'lake'} */
 let currentArea = AREA.FARM;
 let transitioning = false;
 let farmRoot = null;
 let caveRoot = null;
 let villageRoot = null;
+let lakeRoot = null;
+let basementRoot = null;
 let groundDecor = null;
 
-const PORTALS = [
-  {
-    id: 'farm_to_cave',
-    from: AREA.FARM,
-    to: AREA.CAVE,
-    position: CAVE_POSITION,
-    hint: 'E — Entrar na caverna',
-    spawn: CAVE_ENTER_SPAWN
-  },
-  {
-    id: 'cave_to_farm',
-    from: AREA.CAVE,
-    to: AREA.FARM,
-    position: CAVE_EXIT_SPAWN,
-    hint: 'E — Sair da caverna',
-    spawn: FARM_FROM_CAVE_SPAWN
-  },
-  {
-    id: 'farm_to_village',
-    from: AREA.FARM,
-    to: AREA.VILLAGE,
-    position: VILLAGE_GATE,
-    hint: 'E — Ir à vila',
-    spawn: VILLAGE_ENTER_SPAWN
-  },
-  {
-    id: 'village_to_farm',
-    from: AREA.VILLAGE,
-    to: AREA.FARM,
-    position: { x: VILLAGE_PLAZA.x, z: VILLAGE_PLAZA.z - 6.5 },
-    hint: 'E — Voltar à fazenda',
-    spawn: FARM_FROM_VILLAGE_SPAWN
+const PORTALS = [];
+
+export function applyMapPortals(map = getMap()) {
+  PORTALS.length = 0;
+  const list = map?.portals || [];
+  for (const p of list) {
+    PORTALS.push({
+      id: p.id,
+      from: p.from,
+      to: p.to,
+      position: { x: p.position.x, z: p.position.z },
+      hint: p.hint,
+      spawn: { x: p.spawn.x, z: p.spawn.z }
+    });
   }
-];
+}
 
 export function getCurrentArea() {
   return currentArea;
@@ -77,13 +63,17 @@ export function getActiveBounds() {
 export function getAreaLabel(areaId = currentArea) {
   if (areaId === AREA.CAVE) return 'Caverna';
   if (areaId === AREA.VILLAGE) return 'Vila';
+  if (areaId === AREA.LAKE) return 'Lago';
+  if (areaId === AREA.BASEMENT) return 'Porão';
   return 'Fazenda';
 }
 
-export function setAreaRoots({ farm, cave, village, ground }) {
+export function setAreaRoots({ farm, cave, village, lake, basement, ground }) {
   farmRoot = farm;
   caveRoot = cave;
   villageRoot = village;
+  lakeRoot = lake;
+  basementRoot = basement;
   groundDecor = ground;
 }
 
@@ -102,12 +92,14 @@ export function nearestPortal(playerPos, range = PORTAL_RANGE) {
 }
 
 function applyAreaVisibility(areaId) {
-  if (farmRoot) farmRoot.visible = areaId === AREA.FARM;
+  const overworld = areaId === AREA.FARM || areaId === AREA.VILLAGE;
+  if (farmRoot) farmRoot.visible = overworld;
   if (caveRoot) caveRoot.visible = areaId === AREA.CAVE;
-  if (villageRoot) villageRoot.visible = areaId === AREA.VILLAGE;
+  if (villageRoot) villageRoot.visible = overworld;
+  if (lakeRoot) lakeRoot.visible = areaId === AREA.LAKE;
+  if (basementRoot) basementRoot.visible = areaId === AREA.BASEMENT;
   if (groundDecor) {
-    // Chão/montanhas/grama só no overworld (fazenda e vila compartilham o terreno)
-    groundDecor.visible = areaId !== AREA.CAVE;
+    groundDecor.visible = overworld;
   }
 }
 
@@ -174,18 +166,37 @@ export function getMinimapMarkers(areaId = currentArea) {
   }
   if (areaId === AREA.VILLAGE) {
     return {
-      house: null,
+      house: HOUSE_POSITION,
       village: VILLAGE_PLAZA,
+      cave: CAVE_POSITION,
+      lake: LAKE_GATE,
+      exit: null
+    };
+  }
+  if (areaId === AREA.LAKE) {
+    const lakeExit = PORTALS.find(p => p.id === 'lake_to_farm');
+    return {
+      house: null,
+      village: null,
+      cave: null,
+      lake: LAKE_AREA_CENTER,
+      exit: lakeExit?.position || null
+    };
+  }
+  if (areaId === AREA.BASEMENT) {
+    return {
+      house: null,
+      village: null,
       cave: null,
       lake: null,
-      exit: PORTALS.find(p => p.id === 'village_to_farm').position
+      exit: BASEMENT_ENTER_SPAWN
     };
   }
   return {
-    house: { x: 0, z: -8 },
-    village: VILLAGE_GATE,
+    house: HOUSE_POSITION,
+    village: VILLAGE_PLAZA,
     cave: CAVE_POSITION,
-    lake: { x: 18, z: 8 },
+    lake: LAKE_GATE,
     exit: null
   };
 }

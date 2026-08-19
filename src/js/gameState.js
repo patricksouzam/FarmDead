@@ -26,6 +26,7 @@ export function createGameState() {
     maxAnimals: 4,
     products: { Ovo: 0, Leite: 0, Lã: 0, 'Peixe Comum': 0, 'Peixe Raro': 0 },
     materials: { Pedra: 0, Minerio: 0, Carvao: 0 },
+    worldSeed: 0,
     animalConfigs: {
       Galinha: { cost: 60, product: 'Ovo', productTime: 14000, sell: 8 },
       Vaca: { cost: 180, product: 'Leite', productTime: 26000, sell: 15 },
@@ -57,7 +58,26 @@ export function createGameState() {
     restedToday: false,
     lastMoneyMilestone: 0,
 
-    decorations: { flowerBeds: 0, barrels: 0, scarecrow: false, fancyFence: false }
+    decorations: { flowerBeds: 0, barrels: 0, scarecrow: false, fancyFence: false },
+
+    playerHealth: 100,
+    playerMaxHealth: 100,
+
+    hunger: 100,
+    maxHunger: 100,
+    thirst: 100,
+    maxThirst: 100,
+    bleeding: false,
+    infected: false,
+    bandages: 2,
+    vaccines: 0,
+    cannedFood: 1,
+    bottledWater: 1,
+    ammo: { pistola: 14, espingarda: 6 },
+    mag: { pistola: 7, espingarda: 2 },
+
+    weaponsOwned: [],
+    equippedWeapon: 'fists'
   };
 }
 
@@ -105,6 +125,33 @@ export const DECORATION_COSTS = {
 };
 export const MAX_FLOWER_BEDS = 3;
 export const MAX_BARRELS = 3;
+
+// Preço de venda dos materiais coletados no mini-game da caverna (movido de
+// cave.js — não tem relação com mineração 3D, é só tabela de preço).
+export const MATERIAL_SELL = { Pedra: 4, Minerio: 12, Carvao: 8 };
+
+// --- Combate no mundo aberto (fazenda/vila/lago à noite) ---------------
+export const PLAYER_MAX_HEALTH = 100;
+export const PLAYER_ATTACK_DAMAGE_MELEE = 18;
+export const PLAYER_ATTACK_DAMAGE_RANGED = 14;
+export const PLAYER_ATTACK_COOLDOWN_MS = 550;
+export const PLAYER_RANGED_COOLDOWN_MS = 850;
+export const PLAYER_MELEE_RANGE = 1.6;
+export const PLAYER_MELEE_ARC_DEG = 100;
+export const PLAYER_RESPAWN_ENERGY_PENALTY = 20;
+export const PLAYER_RESPAWN_MONEY_PENALTY_PCT = 0.05;
+export const PLAYER_RESPAWN_MONEY_PENALTY_CAP = 60;
+export const PLAYER_DAMAGE_INVULN_MS = 500;
+
+export const ENEMY_CONTACT_DAMAGE = { Zumbi: 10, ZumbiCorredor: 8, ZumbiBruto: 16, ZumbiRastejante: 12 };
+export const ENEMY_CONTACT_COOLDOWN_MS = 1000;
+export const ENEMY_AGGRO_RANGE = 14;
+export const ENEMY_DEAGGRO_RANGE = 20;
+export const ENEMY_MAX_ACTIVE = 8;
+export const ENEMY_SPAWN_CHECK_INTERVAL_MS = 3500;
+export const ENEMY_SAFE_ZONE_RADIUS = 8;
+export const ENEMY_SPAWN_MIN_DIST_FROM_PLAYER = 10;
+export const ENEMY_SPAWN_MAX_DIST_FROM_PLAYER = 22;
 
 export function friendshipTierBonus(friendship, table) {
   let best = 0;

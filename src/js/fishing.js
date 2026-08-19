@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { voxelBox, voxelMat } from './voxel.js';
-import { LAKE_POSITION, DOCK_POSITION, registerObstaclePublic } from './world.js';
+import { LAKE_POSITION, DOCK_POSITION, registerObstaclePublic, AREA_BOUNDS } from './world.js';
+import { FARM_BASE_HEIGHT } from './terrain/heightmap.js';
+import { createTerrainForArea } from './terrain/terrainMesh.js';
 
 export const FISH_ENERGY_COST = 2;
 export const FISH_DURATION_MS = 2200;
@@ -15,10 +17,19 @@ let dockMesh = null;
 let fishingUntil = 0;
 let fishingActive = false;
 
-export function createLake(scene) {
+export function createLake(scene, worldSeed = 12345) {
+  // Terreno da área "lake" (depressão + praia + encostas), gerado pelo motor
+  // voxel dentro dos bounds próprios da área (AREA_BOUNDS.lake em world.js).
+  const { group: terrainGroup } = createTerrainForArea('lake', AREA_BOUNDS.lake, worldSeed, LAKE_POSITION);
+  terrainGroup.name = 'lakeTerrain';
+  scene.add(terrainGroup);
+
   const group = new THREE.Group();
   group.name = 'lake';
-  group.position.set(LAKE_POSITION.x, 0, LAKE_POSITION.z);
+  // Y = nível d'água = mesma convenção de getGroundHeightAt/placeOnTerrain
+  // em toda a base (FARM_BASE_HEIGHT + 1 = topo andável, não o valor puro).
+  // O fundo do lago fica LAKE_DEPTH blocos abaixo disso (ver heightmap.js).
+  group.position.set(LAKE_POSITION.x, FARM_BASE_HEIGHT + 1, LAKE_POSITION.z);
 
   const waterMat = new THREE.MeshStandardMaterial({
     color: 0x3a9fd8,
@@ -59,10 +70,27 @@ export function createLake(scene) {
     group.add(rock);
   });
 
+  const foamMat = new THREE.MeshStandardMaterial({
+    color: 0xd8e8f0, roughness: 0.55, transparent: true, opacity: 0.45, flatShading: true
+  });
+  [[-2.4, 0.4], [2.5, -0.2], [0.2, 2.3], [-0.4, -2.2], [1.6, 1.6]].forEach(([x, z], i) => {
+    const foam = new THREE.Mesh(new THREE.BoxGeometry(0.7 + (i % 2) * 0.25, 0.05, 0.45), foamMat.clone());
+    foam.position.set(x, 0.16, z);
+    foam.userData.foamPhase = i * 0.9;
+    group.add(foam);
+  });
+  group.userData.animateLake = (t) => {
+    group.children.forEach(child => {
+      if (child.userData.foamPhase == null) return;
+      child.position.y = 0.14 + Math.sin(t * 1.6 + child.userData.foamPhase) * 0.03;
+      if (child.material) child.material.opacity = 0.32 + Math.sin(t * 2.1 + child.userData.foamPhase) * 0.12;
+    });
+  };
+
   // Colisão: bloquear o centro da água (não andável)
-  registerObstaclePublic(LAKE_POSITION.x, LAKE_POSITION.z, 2.4, 'farm');
-  registerObstaclePublic(LAKE_POSITION.x + 1.5, LAKE_POSITION.z + 0.8, 1.2, 'farm');
-  registerObstaclePublic(LAKE_POSITION.x - 1.4, LAKE_POSITION.z + 0.6, 1.1, 'farm');
+  registerObstaclePublic(LAKE_POSITION.x, LAKE_POSITION.z, 2.4, 'lake');
+  registerObstaclePublic(LAKE_POSITION.x + 1.5, LAKE_POSITION.z + 0.8, 1.2, 'lake');
+  registerObstaclePublic(LAKE_POSITION.x - 1.4, LAKE_POSITION.z + 0.6, 1.1, 'lake');
 
   // Cais de pesca (oeste do lago, perto do jogador)
   const dock = new THREE.Group();

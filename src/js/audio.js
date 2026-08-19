@@ -43,14 +43,21 @@ const SFX_PRESETS = {
   bell: { freqStart: 920, freqEnd: 620, duration: 0.35, type: 'sine', hits: 3, hitGap: 0.22 }
 };
 
-export function playSfx(name) {
+export function playSfx(name, opts = {}) {
   if (!audioCtx) return;
+  if (name === 'zombie_idle' || name === 'zombie_agro' || name === 'zombie_attack'
+    || name === 'zombie_hurt' || name === 'zombie_die' || name === 'melee_swing'
+    || name === 'gunshot' || name === 'flesh_hit' || name === 'reload') {
+    playComplexSfx(name, opts);
+    return;
+  }
   const preset = SFX_PRESETS[name];
   if (!preset) return;
 
   const hits = preset.hits || 1;
   const hitGap = preset.hitGap || 0;
   const now = audioCtx.currentTime;
+  const vol = opts.volume ?? 0.28;
 
   for (let h = 0; h < hits; h++) {
     const start = now + h * hitGap;
@@ -61,12 +68,142 @@ export function playSfx(name) {
     osc.frequency.setValueAtTime(preset.freqStart - freqBias, start);
     osc.frequency.linearRampToValueAtTime(preset.freqEnd - freqBias * 0.5, start + preset.duration);
     gain.gain.setValueAtTime(0.001, start);
-    gain.gain.linearRampToValueAtTime(0.28, start + 0.02);
+    gain.gain.linearRampToValueAtTime(vol, start + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.001, start + preset.duration);
     osc.connect(gain);
     gain.connect(sfxGain);
     osc.start(start);
     osc.stop(start + preset.duration + 0.02);
+  }
+}
+
+function noiseBuffer(duration) {
+  const len = Math.max(1, Math.floor(audioCtx.sampleRate * duration));
+  const buffer = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+  return buffer;
+}
+
+function playComplexSfx(name, opts) {
+  const now = audioCtx.currentTime;
+  const volMul = opts.volume ?? 1;
+
+  if (name === 'reload') {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(220, now);
+    osc.frequency.setValueAtTime(160, now + 0.08);
+    osc.frequency.setValueAtTime(280, now + 0.16);
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.16 * volMul, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    osc.connect(gain);
+    gain.connect(sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.3);
+    return;
+  }
+
+  if (name === 'melee_swing') {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    const filter = audioCtx.createBiquadFilter();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(140, now);
+    osc.frequency.exponentialRampToValueAtTime(70, now + 0.16);
+    filter.type = 'lowpass';
+    filter.frequency.value = 900;
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.22 * volMul, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.22);
+    return;
+  }
+
+  if (name === 'gunshot') {
+    const src = audioCtx.createBufferSource();
+    src.buffer = noiseBuffer(0.18);
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(2400, now);
+    filter.frequency.exponentialRampToValueAtTime(280, now + 0.14);
+    const gain = audioCtx.createGain();
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.45 * volMul, now + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(sfxGain);
+    src.start(now);
+    src.stop(now + 0.2);
+    return;
+  }
+
+  if (name === 'flesh_hit') {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(90, now);
+    osc.frequency.exponentialRampToValueAtTime(40, now + 0.12);
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.32 * volMul, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+    osc.connect(gain);
+    gain.connect(sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.18);
+    const src = audioCtx.createBufferSource();
+    src.buffer = noiseBuffer(0.1);
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.18 * volMul, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+    src.connect(ng);
+    ng.connect(sfxGain);
+    src.start(now);
+    src.stop(now + 0.12);
+    return;
+  }
+
+  const groaning = name === 'zombie_idle' || name === 'zombie_agro' || name === 'zombie_attack';
+  const duration = name === 'zombie_die' ? 0.55 : (name === 'zombie_hurt' ? 0.22 : 0.45);
+  const src = audioCtx.createBufferSource();
+  src.buffer = noiseBuffer(duration);
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'bandpass';
+  const base = name === 'zombie_agro' ? 420 : name === 'zombie_attack' ? 280 : name === 'zombie_hurt' ? 520 : 180;
+  filter.frequency.setValueAtTime(base, now);
+  filter.frequency.linearRampToValueAtTime(base * (groaning ? 0.55 : 0.4), now + duration);
+  filter.Q.value = 2.2;
+  const gain = audioCtx.createGain();
+  const peak = (name === 'zombie_attack' ? 0.28 : name === 'zombie_die' ? 0.34 : 0.16) * volMul;
+  gain.gain.setValueAtTime(0.001, now);
+  gain.gain.linearRampToValueAtTime(peak, now + 0.05);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+  src.connect(filter);
+  filter.connect(gain);
+  gain.connect(sfxGain);
+  src.start(now);
+  src.stop(now + duration + 0.02);
+
+  if (groaning || name === 'zombie_die') {
+    const osc = audioCtx.createOscillator();
+    const og = audioCtx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(name === 'zombie_die' ? 70 : 95, now);
+    osc.frequency.linearRampToValueAtTime(name === 'zombie_die' ? 40 : 60, now + duration);
+    og.gain.setValueAtTime(0.001, now);
+    og.gain.linearRampToValueAtTime(0.08 * volMul, now + 0.04);
+    og.gain.exponentialRampToValueAtTime(0.001, now + duration);
+    osc.connect(og);
+    og.connect(sfxGain);
+    osc.start(now);
+    osc.stop(now + duration + 0.02);
   }
 }
 

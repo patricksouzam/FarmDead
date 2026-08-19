@@ -1,6 +1,9 @@
 import { LOW_ENERGY_THRESHOLD, seedCostFor, effectiveSaleBonus, DAYS_PER_SEASON } from './gameState.js';
 import { SEASONS, dayOfSeasonFor } from './seasons.js';
 import { FEED_RECIPE, SNACK_RECIPE, YARN_GIFT_RECIPE } from './crafting.js';
+import { ensureSurvival } from './survival.js';
+import { getWeaponDef } from './weapons.js';
+import { PAST_STORY_ENABLED } from './featureFlags.js';
 
 export function updateHUD(state) {
   document.getElementById('money-display').textContent = `R$ ${state.money}`;
@@ -22,8 +25,45 @@ export function updateHUD(state) {
     energyEl.textContent = `${state.energy} / ${state.maxEnergy}`;
     const pill = energyEl.closest('.pill');
     if (pill) pill.classList.toggle('pill-warning', state.energy <= LOW_ENERGY_THRESHOLD);
+    const energyBar = document.getElementById('energy-bar');
+    if (energyBar) energyBar.style.width = `${Math.max(0, Math.min(100, (state.energy / state.maxEnergy) * 100))}%`;
   }
 
+  const healthEl = document.getElementById('health-display');
+  if (healthEl) {
+    healthEl.textContent = `${Math.round(state.playerHealth)} / ${state.playerMaxHealth}`;
+    const pill = healthEl.closest('.pill');
+    if (pill) pill.classList.toggle('pill-warning', state.playerHealth <= state.playerMaxHealth * 0.25);
+    const healthBar = document.getElementById('health-bar');
+    if (healthBar) healthBar.style.width = `${Math.max(0, Math.min(100, (state.playerHealth / state.playerMaxHealth) * 100))}%`;
+  }
+
+  ensureSurvival(state);
+  const hungerEl = document.getElementById('hunger-display');
+  if (hungerEl) {
+    hungerEl.textContent = `${Math.round(state.hunger)} / ${state.maxHunger}`;
+    const hungerBar = document.getElementById('hunger-bar');
+    if (hungerBar) hungerBar.style.width = `${Math.max(0, Math.min(100, (state.hunger / state.maxHunger) * 100))}%`;
+    hungerEl.closest('.pill')?.classList.toggle('pill-warning', state.hunger <= 20);
+  }
+  const thirstEl = document.getElementById('thirst-display');
+  if (thirstEl) {
+    thirstEl.textContent = `${Math.round(state.thirst)} / ${state.maxThirst}`;
+    const thirstBar = document.getElementById('thirst-bar');
+    if (thirstBar) thirstBar.style.width = `${Math.max(0, Math.min(100, (state.thirst / state.maxThirst) * 100))}%`;
+    thirstEl.closest('.pill')?.classList.toggle('pill-warning', state.thirst <= 20);
+  }
+
+  const flags = document.getElementById('status-flags');
+  if (flags) {
+    const chips = [];
+    if (state.bleeding) chips.push('<span class="status-chip">Sangrando</span>');
+    if (state.infected) chips.push('<span class="status-chip infect">Infectado</span>');
+    flags.innerHTML = chips.join('');
+    flags.classList.toggle('hidden', chips.length === 0);
+  }
+
+  updateWeaponHUD(state);
   updateCraftLabels(state);
 }
 
@@ -129,6 +169,21 @@ export function updateInventoryUI(state, onSell, onSellProduct, onSelectSeed) {
       row.querySelector('button').addEventListener('click', () => onSellProduct(type));
       container.appendChild(row);
     }
+  }
+
+  if (Array.isArray(state.weaponsOwned) && state.weaponsOwned.length) {
+    const names = { taco: 'Taco de madeira', machado: 'Machado', pistola: 'Pistola', espingarda: 'Espingarda' };
+    state.weaponsOwned.forEach(id => {
+      const row = document.createElement('div');
+      row.className = 'inv-row';
+      const equipped = state.equippedWeapon === id;
+      row.innerHTML = `
+        <div>
+          <strong>${names[id] || id}</strong><br>
+          <span class="inv-row-meta">${equipped ? 'Equipada' : 'Coletada — role o mouse para trocar'}</span>
+        </div>`;
+      container.appendChild(row);
+    });
   }
 
   updateCraftLabels(state);
@@ -279,6 +334,38 @@ export function updateUpgradesUI(state) {
   }
 }
 
+export function updateWeaponHUD(state) {
+  const nameEl = document.getElementById('weapon-name');
+  if (!nameEl) return;
+  const names = {
+    fists: 'Punhos',
+    taco: 'Taco de madeira',
+    machado: 'Machado',
+    pistola: 'Pistola',
+    espingarda: 'Espingarda'
+  };
+  const id = state.equippedWeapon || 'fists';
+  nameEl.textContent = names[id] || id;
+  const ammoEl = document.getElementById('weapon-ammo');
+  const def = getWeaponDef(id);
+  if (ammoEl) {
+    if (def.kind === 'ranged') {
+      ammoEl.textContent = `${state.mag?.[id] ?? 0} / ${state.ammo?.[id] ?? 0}`;
+      ammoEl.classList.remove('hidden');
+    } else {
+      ammoEl.classList.add('hidden');
+    }
+  }
+  const hintEl = document.getElementById('weapon-hint');
+  if (hintEl) {
+    if (def.kind === 'ranged') {
+      hintEl.textContent = 'Clique atira · Direito mira · R recarrega · Scroll troca';
+    } else {
+      hintEl.textContent = 'Clique esquerdo ataca · Scroll troca arma · E coleta';
+    }
+  }
+}
+
 let notifTimeout = null;
 export function showNotification(text) {
   const notif = document.getElementById('notification');
@@ -301,7 +388,8 @@ export function updateGoalsUI(state, goal) {
   const progress = document.getElementById('goal-progress');
   const hint = document.getElementById('goal-hint');
 
-  if (!goal) {
+  if (!card) return;
+  if (!PAST_STORY_ENABLED || !goal) {
     card.classList.add('hidden');
     return;
   }
@@ -359,6 +447,7 @@ export function hideDialogue() {
 }
 
 export function showChapterIntro(goal) {
+  if (!PAST_STORY_ENABLED || !goal) return;
   showDialogue(`Capítulo ${goal.chapter}: ${goal.title}`, goal.intro);
 }
 

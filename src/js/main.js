@@ -11,11 +11,18 @@ import {
   createBarn, createSilo, createPaths, createClouds, createCorral,
   createSun, createMoon, createWindSystem, updateWind, applyWindEffects,
   createMerchantNpc, createSupplierNpc, createWell, createGovOfficialNpc, createArtesianWell,
-  createDecoration, createVillage, createVillageGate, createCaveEntrance,
-  BARN_POSITION, HOUSE_POSITION,
-  VILLAGE_PLAZA, VILLAGE_GATE, avoidObstacles, beginObstacleRegistration
+  createDecoration, createVillage, createVillageGate, createCaveEntrance, createLakeGate,
+  createVillageCorpses, layNpcCorpse, createNightClutter,
+  BARN_POSITION, HOUSE_POSITION, FARM_FROM_CAVE_SPAWN, PLAYER_SPAWN, VILLAGE_GATE,
+  FENCES_LAYOUT, CORRAL_LAYOUT, applyWorldMap,
+  VILLAGE_PLAZA, avoidObstacles, beginObstacleRegistration, getGroundHeightAt
 } from './world.js';
-import { createCave, nearestMineNode, tryMineNode, updateCaveNodes, MATERIAL_SELL } from './cave.js';
+import { loadWorldMap, getMap, getPlayerSpawn, pointInBounds, clampToBounds } from './mapLoader.js';
+import { createPlaneWreck } from './planeWreck.js';
+import { createBasement, nearestLoreNote, showLoreNote, hideLoreNote, isLoreNoteOpen } from './basement.js';
+import {
+  isCaveMinigameActive, initCaveMinigame, updateCaveMinigame, renderCaveMinigame
+} from './caveMinigame.js';
 import { createLake, isNearDock, startFishing, updateFishing, isFishing, fishSellPrice } from './fishing.js';
 import { updateMinimap, updateAreaBadge } from './ui.js';
 import {
@@ -23,6 +30,8 @@ import {
   maybeSpawnWeed, removeWeed, setPlotNeedsWaterHint
 } from './crops.js';
 import { spawnAnimal, updateAnimalAI, animateAnimal, removeAnimal, createWolfMesh, updateWolfPatrol } from './animals.js';
+import { spawnEnemy, updateEnemyAI, animateEnemy, removeEnemy, poseEnemyCorpse } from './enemies.js';
+import { beginMeleeSwing, fireWeaponProjectiles, updateArrows, equippedWeapon, updateMeleeSwing } from './combat.js';
 import { checkGoals, getActiveGoal } from './goals.js';
 import {
   createGameState, FARM_UPGRADE_COSTS, HOUSE_UPGRADE_COST, CAR_COST, CAR_SALE_BONUS, WELL_COST, WATER_REFILL_COST,
@@ -30,12 +39,16 @@ import {
   WOLF_RISK_CHECK_INTERVAL_MS, ARTESIAN_WELL_COST, ARTESIAN_WELL_WATER_BONUS,
   ENERGY_COST, FRIENDSHIP_PER_ORDER, FRIENDSHIP_PER_GIFT, FRIENDSHIP_MILESTONES,
   DECORATION_COSTS, MAX_FLOWER_BEDS, MAX_BARRELS, REST_ENERGY_GAIN, HOUSE_REST_RANGE,
-  SCARECROW_WEED_CHANCE, BASE_WEED_CHANCE, MONEY_MILESTONES,
+  SCARECROW_WEED_CHANCE, BASE_WEED_CHANCE, MONEY_MILESTONES, MATERIAL_SELL,
+  ENEMY_MAX_ACTIVE, ENEMY_SPAWN_CHECK_INTERVAL_MS, ENEMY_SAFE_ZONE_RADIUS,
+  ENEMY_SPAWN_MIN_DIST_FROM_PLAYER, ENEMY_SPAWN_MAX_DIST_FROM_PLAYER,
+  PLAYER_DAMAGE_INVULN_MS, PLAYER_RESPAWN_ENERGY_PENALTY, PLAYER_RESPAWN_MONEY_PENALTY_PCT,
+  PLAYER_RESPAWN_MONEY_PENALTY_CAP,
   seedCostFor, govAuthCostFor, orderRewardFor, effectiveSaleBonus
 } from './gameState.js';
 import {
   updateHUD, updateInventoryUI, updateUpgradesUI, showNotification, setActiveTool, updateGoalsUI,
-  setDuskWarning, showDialogue, hideDialogue, showChapterIntro, showConfirmDialog
+  setDuskWarning, showDialogue, hideDialogue, showChapterIntro, showConfirmDialog, updateWeaponHUD
 } from './ui.js';
 import {
   seasonForDay, dayOfSeasonFor, growthMultiplierForSeason, skyPaletteForSeason,
@@ -50,23 +63,45 @@ import { svgIcon } from '../icons/icons.js';
 import { APP_STATE } from './appFlow.js';
 import { loadSettings, saveSettings, applyQualityPreset } from './settings.js';
 import { initAudio, applyAudioSettings, playSfx } from './audio.js';
+import { FARMING_ENABLED, PAST_STORY_ENABLED } from './featureFlags.js';
+import { spawnBlood, updateBlood, clearBlood } from './blood.js';
+import {
+  spawnDust, spawnSmokePuff, addSmokeEmitter, spawnMeleeDust,
+  updateParticles, tickWeather, weatherFogMul
+} from './particles.js';
+import {
+  ensureSurvival, tickSurvival, applyZombieWound, useBandage, useVaccine,
+  eatFood, drinkWater, consumeMagShot, reloadWeapon, spawnSurvivalLoot,
+  animateSurvivalLoot, nearestLoot, collectLoot, lootLabel
+} from './survival.js';
 import { serializeGame, getRuntimeSnapshot } from './saveGame.js';
 import {
   createPlayer, bindPlayerInput, updatePlayerMovement, updateFollowCamera,
-  isInRange, nearestInRange, setPlayerPosition, PLAYER_INTERACT_RANGE
+  isInRange, nearestInRange, setPlayerPosition, PLAYER_INTERACT_RANGE,
+  attachFirstPerson, requestPlayerPointerLock, exitPlayerPointerLock, getLookDirection
 } from './player.js';
+import {
+  spawnWeaponPickups, clearWeaponPickups, nearestWeaponPickup, animateWeaponPickups,
+  createViewmodel, setViewmodelWeapon, kickViewmodel, updateViewmodel,
+  getWeaponDef, ownedWeapons
+} from './weapons.js';
 import {
   craftFeed, canCraftFeed, feedAnimal, collectReadyProduct, FEED_RECIPE,
   craftSnack, canCraftSnack, SNACK_RECIPE, craftYarnGift, canCraftYarnGift, YARN_GIFT_RECIPE
 } from './crafting.js';
-import { animateIdleHumanoid, animateWalkHumanoid } from './characters.js';
+import { animateIdleHumanoid, animateWalkHumanoid, animateAttackHumanoid } from './characters.js';
 import {
   AREA, getCurrentArea, getActiveBounds, getAreaLabel, setAreaRoots,
-  nearestPortal, transitionToArea, forceArea, getMinimapMarkers, isTransitioning
+  nearestPortal, transitionToArea, forceArea, getMinimapMarkers, isTransitioning,
+  applyMapPortals
 } from './areas.js';
 
 const canvas = document.getElementById('game-canvas');
+const minigameCanvas = document.getElementById('cave-minigame-canvas');
+const minigameCtx = minigameCanvas.getContext('2d');
 const state = createGameState();
+const DEBUG_ENDPOINT = 'http://127.0.0.1:7299/ingest/8bc68156-38f8-493e-9aa8-401dffdaa1b4';
+const DEBUG_SESSION_ID = '9196a3';
 
 let scene, camera, renderer, composer, controls, bloomPass;
 let raycaster, mouse;
@@ -76,9 +111,10 @@ let appSettings = loadSettings();
 let giftTargetNpc = null;
 let sunLight, ambientLight, hemiLight, moonLight, fillLight, skyUniforms;
 let houseGroup, carGroup, windmill, clouds, treesGroup, groundMesh, barnGroup;
-let sunMesh, moonMesh, windSystem;
-let farmRoot, caveRoot, villageRoot;
+let sunMesh, moonMesh, windSystem, planeWreckGroup, lakeGroup;
+let farmRoot, caveRoot, villageRoot, lakeRoot, basementRoot;
 let corral, wolf, merchantNpc, supplierNpc, govNpc, wellGroup, artesianWellGroup, alarmBell;
+let deadVillagers = [];
 let alarmRinging = false;
 let alarmBellSwingTime = 0;
 let farmPlots = [];
@@ -93,10 +129,10 @@ let isHolding = false;
 let isBatchHolding = false;
 let holdStartTime = 0;
 
-let worldTime = 400; // 06:40
+let worldTime = 21 * 60 + 20; // 21:20 — noite permanente
 let lastFrameTime = performance.now();
 let timeScale = 1;
-let wasDay = true;
+let wasDay = false;
 let duskWarningShown = false;
 let wolfRiskTimer = 0;
 let weedSpawnTimer = 0;
@@ -104,9 +140,31 @@ let goalCheckTimer = 0;
 let lastGoalId = null;
 let winterStreakBroken = false;
 
-init();
+let enemies = [];
+let arrows = [];
+let weaponPickups = [];
+let survivalLoot = [];
+let viewmodel = null;
+let enemySpawnTimer = 0;
+let attackAnimTime = null;
+const ATTACK_ANIM_DURATION = 0.28;
 
-function init() {
+init().catch(err => console.error('Falha ao iniciar o jogo:', err));
+
+async function init() {
+  // #region agent log
+  debugLog('H2', 'init.start', {
+    hasCanvas: !!canvas,
+    hasMinigameCanvas: !!minigameCanvas,
+    minigameCtxOk: !!minigameCtx,
+    viewport: { w: window.innerWidth, h: window.innerHeight }
+  });
+  // #endregion
+
+  await loadWorldMap();
+  applyWorldMap();
+  applyMapPortals();
+
   scene = createScene();
   skyUniforms = createSky(scene);
   clouds = createClouds(scene);
@@ -115,17 +173,18 @@ function init() {
   windSystem = createWindSystem(scene);
   ({ ambientLight, hemiLight, sunLight, moonLight, fillLight } = createLights(scene));
 
-  camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500);
-  camera.position.set(0, 15, 22);
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.06, 500);
+  camera.position.set(PLAYER_SPAWN.x, 1.6, PLAYER_SPAWN.z);
+  camera.rotation.order = 'YXZ';
 
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.25;
+  renderer.toneMappingExposure = 1.18;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.set(0, 1, -2);
+  controls.target.set(PLAYER_SPAWN.x, 1, PLAYER_SPAWN.z + 2);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.minDistance = 6;
@@ -137,9 +196,16 @@ function init() {
 
   composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.38, 0.5, 0.82);
+  bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.42, 0.48, 0.78);
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
+  // #region agent log
+  debugLog('H2', 'init.renderer_ready', {
+    rendererSize: renderer.getSize(new THREE.Vector2()).toArray(),
+    pixelRatio: renderer.getPixelRatio(),
+    cameraAspect: camera.aspect
+  });
+  // #endregion
 
   applyGraphicsSettings(appSettings.graphics);
 
@@ -152,63 +218,98 @@ function init() {
   caveRoot.name = 'caveRoot';
   villageRoot = new THREE.Group();
   villageRoot.name = 'villageRoot';
+  lakeRoot = new THREE.Group();
+  lakeRoot.name = 'lakeRoot';
+  basementRoot = new THREE.Group();
+  basementRoot.name = 'basementRoot';
   scene.add(farmRoot);
   scene.add(caveRoot);
   scene.add(villageRoot);
+  scene.add(lakeRoot);
+  scene.add(basementRoot);
+
+  // Seed fixa: o terreno não é editável nesta rodada (motor voxel gera o
+  // mesmo mundo sempre), então não há necessidade de variar por save — só
+  // persiste no save (state.worldSeed) para permitir customização futura
+  // sem exigir migração de saves antigos.
+  if (!state.worldSeed) state.worldSeed = 12345;
 
   beginObstacleRegistration('farm');
-  groundMesh = createGround(scene);
-  createFences(farmRoot, [-14, 16], [-13, 10], { gateSide: 'north', gateWidth: 2.4 });
+  groundMesh = createGround(scene, state.worldSeed);
+  createFences(farmRoot, FENCES_LAYOUT.boundsX, FENCES_LAYOUT.boundsZ, {
+    gateSide: FENCES_LAYOUT.gateSide,
+    gateWidth: FENCES_LAYOUT.gateWidth
+  });
   treesGroup = createTrees(farmRoot);
   windmill = createWindmill(farmRoot);
   barnGroup = createBarn(farmRoot);
   createSilo(farmRoot);
   wolf = createWolfMesh(farmRoot);
 
-  beginObstacleRegistration('village');
-  merchantNpc = createMerchantNpc(villageRoot);
-  supplierNpc = createSupplierNpc(villageRoot);
-  govNpc = createGovOfficialNpc(villageRoot);
-  const village = createVillage(villageRoot);
+  merchantNpc = createMerchantNpc(farmRoot);
+  supplierNpc = createSupplierNpc(farmRoot);
+  govNpc = createGovOfficialNpc(farmRoot);
+  const village = createVillage(farmRoot);
   alarmBell = village.alarmBell;
-  beginObstacleRegistration('farm');
+  layNpcCorpse(merchantNpc, { yaw: 0.8, hint: `${MERCHANT_NAME} não sobreviveu ao ataque.` });
+  layNpcCorpse(supplierNpc, { yaw: -1.1, hint: `${SUPPLIER_NAME} caiu perto da barraca.` });
+  layNpcCorpse(govNpc, { yaw: 2.2, hint: `${GOV_OFFICIAL_NAME} tentou correr. Não deu tempo.` });
+  spawnBlood(farmRoot, merchantNpc.position.x, merchantNpc.position.y, merchantNpc.position.z, { death: true });
+  spawnBlood(farmRoot, supplierNpc.position.x, supplierNpc.position.y, supplierNpc.position.z, { death: true });
+  spawnBlood(farmRoot, govNpc.position.x, govNpc.position.y, govNpc.position.z, { death: true });
+  deadVillagers = createVillageCorpses(farmRoot);
+  deadVillagers.forEach(npc => {
+    spawnBlood(farmRoot, npc.position.x, npc.position.y, npc.position.z, { death: true });
+  });
 
   houseGroup = createHouse(farmRoot, state.houseLevel);
   carGroup = createCar(farmRoot);
   buildCar(carGroup, state.hasCar);
-  player = createPlayer(scene, { x: 0, z: -4 });
+  planeWreckGroup = createPlaneWreck(farmRoot);
+  createNightClutter(farmRoot);
+  createBasement(basementRoot);
+  player = createPlayer(scene, getPlayerSpawn());
+  attachFirstPerson(scene, camera, player);
+  viewmodel = createViewmodel(camera);
+  setViewmodelWeapon(viewmodel, state.equippedWeapon || 'fists');
+  player.viewmodel = viewmodel;
 
-  createCave(caveRoot);
   createCaveEntrance(farmRoot);
   createVillageGate(farmRoot);
-  createLake(farmRoot);
-
-  // Trilhas do hub: casa → portão da vila; casa → caverna; casa → lago; celeiro
-  createPaths(farmRoot, [
-    { width: 1.8, points: [[0, -8.0], [0, -5.0], [0, -1.0], [0, 4.0], [0, 11.5]] },
-    { width: 1.4, points: [[0, -8.0], [5, -8.0], [10, -8.0]] },
-    { width: 1.2, points: [[10, -8.0], [14, -4.0]] },
-    { width: 1.2, points: [[10, -8.0], [13, -13.0]] },
-    { width: 1.3, points: [[0, -8.0], [-4, -7.5], [-8, -7.0]] },
-    { width: 1.5, points: [[0, 4.0], [-8, 4.0], [-16, 4.0], [-19, 4.0]] },
-    { width: 1.5, points: [[0, 4.0], [8, 6.0], [14, 8.0]] }
-  ]);
-  // Trilhas internas da vila
-  beginObstacleRegistration('village');
-  createPaths(villageRoot, [
-    { width: 1.5, points: [[0, 20.0], [0, 26.0]] },
-    { width: 1.3, points: [[0, 24.0], [6.5, 24.5]] },
-    { width: 1.3, points: [[0, 24.0], [-6.5, 24.5]] }
-  ]);
+  createLakeGate(farmRoot);
+  beginObstacleRegistration('lake');
+  const lakeBuilt = createLake(lakeRoot, state.worldSeed);
+  lakeGroup = lakeBuilt?.group || null;
   beginObstacleRegistration('farm');
 
-  rebuildFarmPlots(farmRoot, farmPlots, state.farmLevel);
-  corral = createCorral(farmRoot, -8, -7, 5, 4.5, 'east');
+  // Trilhas do hub: casa → portão da vila; casa → caverna; casa → lago; celeiro
+  const mapPaths = getMap()?.paths;
+  createPaths(farmRoot, mapPaths || [
+    { width: 1.8, points: [[0, -12], [0, -6], [0, 0], [0, 12], [0, 28]] },
+    { width: 1.4, points: [[0, -12], [7, -12], [14, -12]] },
+    { width: 1.2, points: [[14, -12], [20, -8]] },
+    { width: 1.2, points: [[14, -12], [18, -16]] },
+    { width: 1.3, points: [[0, -12], [-6, -12], [-12, -12]] },
+    { width: 1.5, points: [[0, 8], [-12, 8], [-24, 8]] },
+    { width: 1.5, points: [[0, 8], [12, 8], [24, 8]] },
+    { width: 1.6, points: [[0, 28], [0, 36], [0, 42]] },
+    { width: 1.3, points: [[0, 41], [8.2, 39.5]] },
+    { width: 1.3, points: [[0, 41], [-8.2, 39.5]] },
+    { width: 1.2, points: [[0, 42], [0, 44.6]] }
+  ]);
+
+  if (FARMING_ENABLED) rebuildFarmPlots(farmRoot, farmPlots, state.farmLevel);
+  corral = createCorral(farmRoot, CORRAL_LAYOUT.x, CORRAL_LAYOUT.z, CORRAL_LAYOUT.width, CORRAL_LAYOUT.depth, CORRAL_LAYOUT.gateSide);
+  respawnWeaponPickups();
+  ensureSurvival(state);
+  survivalLoot = spawnSurvivalLoot(farmRoot);
 
   setAreaRoots({
     farm: farmRoot,
     cave: caveRoot,
     village: villageRoot,
+    lake: lakeRoot,
+    basement: basementRoot,
     ground: groundMesh.userData.overworldDecor
   });
   forceArea(AREA.FARM);
@@ -217,6 +318,9 @@ function init() {
   bindInput();
   bindUI();
   bindPauseKey();
+  applyFarmingFlag();
+  applyStoryFlag();
+  attachWorldSmoke();
 
   state.season = seasonForDay(state.totalDays);
   applySeasonalWorldTint();
@@ -230,6 +334,13 @@ function init() {
 
   showTitleScreen();
   refreshContinueButton();
+  // #region agent log
+  debugLog('H3', 'init.before_first_frame', {
+    appState,
+    sceneChildren: scene?.children?.length ?? null,
+    currentArea: getCurrentArea()
+  });
+  // #endregion
 
   requestAnimationFrame(animate);
 }
@@ -237,6 +348,12 @@ function init() {
 function bindInput() {
   renderer.domElement.addEventListener('pointerdown', onCanvasPointerDown);
   bindPlayerInput(player, renderer.domElement);
+
+  renderer.domElement.addEventListener('wheel', (e) => {
+    if (appState !== APP_STATE.PLAYING) return;
+    e.preventDefault();
+    cycleEquippedWeapon(Math.sign(e.deltaY));
+  }, { passive: false });
 
   const TOOL_LONG_PRESS_MS = 400;
   document.querySelectorAll('.tool-btn').forEach(btn => {
@@ -252,6 +369,7 @@ function bindInput() {
     };
 
     btn.addEventListener('pointerdown', (e) => {
+      if (!FARMING_ENABLED) return;
       batchStarted = false;
       currentTool = tool;
       setActiveTool(tool);
@@ -285,7 +403,7 @@ function bindInput() {
     if (openModal) return;
 
     const toolHotkeys = { '1': 'plant', '2': 'water', '3': 'harvest', '4': 'weed' };
-    if (toolHotkeys[e.key]) {
+    if (FARMING_ENABLED && toolHotkeys[e.key]) {
       currentTool = toolHotkeys[e.key];
       setActiveTool(currentTool);
       return;
@@ -293,6 +411,7 @@ function bindInput() {
 
     if (e.key.toLowerCase() === 'e') {
       e.preventDefault();
+      if (isLoreNoteOpen()) { hideLoreNote(); return; }
       tryInteractNearby();
     }
     if (e.key.toLowerCase() === 'f') {
@@ -302,10 +421,38 @@ function bindInput() {
       showNotification(feedMode ? 'Modo ração: E ou clique no animal para alimentar.' : 'Modo ração desligado.');
     }
     if (e.key.toLowerCase() === 'r') {
-      tryRestAtHouse();
+      e.preventDefault();
+      tryReloadWeapon();
+    }
+    if (e.key.toLowerCase() === 'h') {
+      const result = useBandage(state);
+      showNotification(result.ok ? result.message : result.reason);
+      if (result.ok) { updateHUD(state); playSfx('harvest'); }
+    }
+    if (e.key.toLowerCase() === 'g') {
+      const result = eatFood(state);
+      showNotification(result.ok ? result.message : result.reason);
+      if (result.ok) { updateHUD(state); playSfx('plant'); }
+    }
+    if (e.key.toLowerCase() === 't') {
+      const result = drinkWater(state);
+      showNotification(result.ok ? result.message : result.reason);
+      if (result.ok) { updateHUD(state); playSfx('water'); }
+    }
+    if (e.key.toLowerCase() === 'v') {
+      const result = useVaccine(state);
+      showNotification(result.ok ? result.message : result.reason);
+      if (result.ok) { updateHUD(state); playSfx('notification'); }
     }
     if (e.key.toLowerCase() === 'c') {
       tryCraftAtBarn();
+    }
+    if (e.key.toLowerCase() === 'q') {
+      attackWithEquippedWeapon();
+    }
+    if (e.key === '5' || e.key === '6' || e.key === '7' || e.key === '8') {
+      const map = { '5': 'taco', '6': 'machado', '7': 'pistola', '8': 'espingarda' };
+      tryEquipWeapon(map[e.key]);
     }
   });
 }
@@ -442,6 +589,8 @@ function bindPauseKey() {
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
 
+    if (isLoreNoteOpen()) { hideLoreNote(); return; }
+
     const confirmModal = document.getElementById('confirm-modal');
     if (confirmModal && !confirmModal.classList.contains('hidden')) {
       document.getElementById('confirm-cancel')?.click();
@@ -455,6 +604,10 @@ function bindPauseKey() {
       openModal.classList.add('hidden');
       return;
     }
+    if (appState === APP_STATE.PLAYING && player?.pointerLocked) {
+      exitPlayerPointerLock();
+      return;
+    }
     if (appState === APP_STATE.PLAYING || appState === APP_STATE.PAUSED) togglePause();
   });
 }
@@ -463,15 +616,25 @@ function bindPauseKey() {
 
 function showTitleScreen() {
   appState = APP_STATE.TITLE;
-  document.getElementById('title-screen').classList.remove('hidden');
+  const titleScreenEl = document.getElementById('title-screen');
+  titleScreenEl.classList.remove('hidden');
   document.getElementById('pause-menu').classList.add('hidden');
   document.getElementById('hud').classList.add('hidden');
+  document.getElementById('hud-clock')?.classList.add('hidden');
   document.getElementById('controls').classList.add('hidden');
   document.getElementById('speed-controls').classList.add('hidden');
+  document.getElementById('weapon-hud')?.classList.add('hidden');
   document.querySelectorAll('.modal').forEach(m => {
     if (m.id !== 'title-screen') m.classList.add('hidden');
   });
   hideDialogue();
+  // #region agent log
+  debugLog('H8', 'title_screen.shown', {
+    className: titleScreenEl.className,
+    display: window.getComputedStyle(titleScreenEl).display,
+    opacity: window.getComputedStyle(titleScreenEl).opacity
+  });
+  // #endregion
 }
 
 function enterPlayingState() {
@@ -479,16 +642,28 @@ function enterPlayingState() {
   document.getElementById('title-screen').classList.add('hidden');
   document.getElementById('pause-menu').classList.add('hidden');
   document.getElementById('hud').classList.remove('hidden');
+  document.getElementById('hud-clock')?.classList.remove('hidden');
   document.getElementById('controls').classList.remove('hidden');
   document.getElementById('speed-controls').classList.remove('hidden');
+  document.getElementById('weapon-hud')?.classList.remove('hidden');
   initAudio();
+  updateWeaponHUD(state);
+  showNotification('Noite eterna. Clique para olhar, E para pegar armas, clique esquerdo para atacar.');
 }
 
 async function startNewGame() {
+  // #region agent log
+  debugLog('H9', 'start_new_game.clicked', {
+    appStateBefore: appState
+  });
+  // #endregion
   initAudio();
   const proceed = () => {
+    enemies.slice().forEach(e => removeEnemy(scene, enemies, e));
+    arrows.forEach(a => scene.remove(a.mesh));
+    arrows = [];
     forceArea(AREA.FARM, () => {
-      if (player) setPlayerPosition(player, 0, -4);
+      if (player) setPlayerPosition(player, PLAYER_SPAWN.x, PLAYER_SPAWN.z);
       updateAreaBadge(getAreaLabel());
     });
     enterPlayingState();
@@ -513,6 +688,10 @@ async function startNewGame() {
 }
 
 function showInitialGoal() {
+  if (!PAST_STORY_ENABLED) {
+    updateGoalsUI(state, null);
+    return;
+  }
   const startingGoal = getActiveGoal(state);
   if (startingGoal && startingGoal.id !== lastGoalId) {
     lastGoalId = startingGoal.id;
@@ -545,6 +724,17 @@ function restoreGame(saved) {
   state.carSaleBonus = saved.state.carSaleBonus ?? (saved.state.hasCar ? CAR_SALE_BONUS : 0);
   state.restedToday = !!saved.state.restedToday;
   state.lastMoneyMilestone = saved.state.lastMoneyMilestone ?? 0;
+  state.playerMaxHealth = saved.state.playerMaxHealth ?? 100;
+  state.playerHealth = (saved.state.playerHealth > 0) ? saved.state.playerHealth : state.playerMaxHealth;
+  state.worldSeed = saved.state.worldSeed || state.worldSeed || 12345;
+  state.weaponsOwned = Array.isArray(saved.state.weaponsOwned) ? saved.state.weaponsOwned : [];
+  state.equippedWeapon = saved.state.equippedWeapon || 'fists';
+  if (viewmodel) setViewmodelWeapon(viewmodel, state.equippedWeapon);
+  updateWeaponHUD(state);
+
+  enemies.slice().forEach(e => removeEnemy(scene, enemies, e));
+  arrows.forEach(a => scene.remove(a.mesh));
+  arrows = [];
 
   state.animals.slice().forEach(a => removeAnimal(scene, state.animals, a));
   state.animals = [];
@@ -559,7 +749,7 @@ function restoreGame(saved) {
 
   crops.forEach(c => { if (c.parent) c.parent.remove(c); });
   crops = [];
-  rebuildFarmPlots(farmRoot, farmPlots, state.farmLevel);
+  if (FARMING_ENABLED) rebuildFarmPlots(farmRoot, farmPlots, state.farmLevel);
   (saved.plots || []).forEach((plotData, i) => {
     const plot = farmPlots[i];
     if (!plot) return;
@@ -584,11 +774,14 @@ function restoreGame(saved) {
 
   restoreWorldVisuals();
   applySeasonalWorldTint();
+  respawnWeaponPickups();
 
   if (saved.runtime) {
     worldTime = saved.runtime.worldTime ?? worldTime;
+    const loadHours = Math.floor(worldTime / 60);
+    if (loadHours >= 5 && loadHours < 20) worldTime = 21 * 60 + 20;
     timeScale = saved.runtime.timeScale ?? timeScale;
-    wasDay = saved.runtime.wasDay ?? wasDay;
+    wasDay = false;
     wolfRiskTimer = saved.runtime.wolfRiskTimer ?? 0;
     weedSpawnTimer = saved.runtime.weedSpawnTimer ?? 0;
     goalCheckTimer = saved.runtime.goalCheckTimer ?? 0;
@@ -597,11 +790,25 @@ function restoreGame(saved) {
     if (player && saved.runtime.playerX != null) {
       const areaId = saved.runtime.area || AREA.FARM;
       forceArea(areaId, () => {
-        setPlayerPosition(player, saved.runtime.playerX, saved.runtime.playerZ ?? -4);
+        const bounds = getActiveBounds();
+        let x = saved.runtime.playerX;
+        let z = saved.runtime.playerZ ?? PLAYER_SPAWN.z;
+        if (!pointInBounds(x, z, bounds)) {
+          const spawn = getPlayerSpawn();
+          x = spawn.x;
+          z = spawn.z;
+        } else {
+          const clamped = clampToBounds(x, z, bounds);
+          x = clamped.x;
+          z = clamped.z;
+        }
+        setPlayerPosition(player, x, z);
         updateAreaBadge(getAreaLabel(areaId));
       });
       player.cameraYaw = saved.runtime.cameraYaw ?? 0;
-      player.cameraPitch = saved.runtime.cameraPitch ?? 0.42;
+      player.cameraPitch = saved.runtime.cameraPitch ?? 0;
+      player.lookYaw = player.cameraYaw;
+      player.lookPitch = player.cameraPitch;
     }
   }
   state.season = seasonForDay(state.totalDays);
@@ -652,6 +859,7 @@ function restoreWorldVisuals() {
 
 function togglePause() {
   if (appState === APP_STATE.PLAYING) {
+    exitPlayerPointerLock();
     appState = APP_STATE.PAUSED;
     document.getElementById('pause-menu').classList.remove('hidden');
   } else if (appState === APP_STATE.PAUSED) {
@@ -774,13 +982,10 @@ function importSaveSlot(slot) {
 }
 
 function sleepUntilDawn() {
-  const hours = Math.floor(worldTime / 60);
-  if (hours >= 6 && hours < 19) { showNotification('Só é possível dormir à noite.'); return; }
-  worldTime = 6 * 60;
   state.energy = state.maxEnergy;
-  state.restedToday = false;
+  state.restedToday = true;
   updateHUD(state);
-  showNotification('Você dormiu até o amanhecer. Energia restaurada.');
+  showNotification('Você descansou. A noite continua lá fora...');
   playSfx('notification');
 }
 
@@ -803,10 +1008,12 @@ function dryGrowingCropsAtDawn() {
 
 function applySeasonalWorldTint() {
   const palette = skyPaletteForSeason(state.season);
-  if (groundMesh) {
+  if (groundMesh?.material?.color) {
     const tint = new THREE.Color(palette.grass).lerp(new THREE.Color(0xffffff), 0.45);
     groundMesh.material.color.copy(tint);
-    if (groundMesh.userData.collarMat) groundMesh.userData.collarMat.color.setHex(palette.grass);
+  }
+  if (groundMesh?.userData?.collarMat?.color) {
+    groundMesh.userData.collarMat.color.setHex(palette.grass);
   }
   if (treesGroup) {
     treesGroup.traverse(obj => {
@@ -836,6 +1043,7 @@ function setTimeScale(scale) {
 function toggleModal(id) {
   const modal = document.getElementById(id);
   modal.classList.toggle('hidden');
+  if (!modal.classList.contains('hidden')) exitPlayerPointerLock();
   if (id === 'shop-modal' || id === 'inventory-modal') {
     updateInventoryUI(state, sellCrop, sellProduct, selectActiveSeed);
   }
@@ -852,14 +1060,17 @@ async function tryUsePortal() {
   if (!player || isTransitioning()) return false;
   const portal = nearestPortal(player.mesh.position);
   if (!portal) return false;
+
+  // A caverna não é mais uma área 3D — o portal abre o mini-game 2D por
+  // cima, sem trocar currentArea (o jogador nunca "sai" da fazenda).
+  if (portal.to === AREA.CAVE) {
+    enterCaveMinigame();
+    return true;
+  }
+
   const ok = await transitionToArea(portal.to, () => {
     setPlayerPosition(player, portal.spawn.x, portal.spawn.z);
     updateAreaBadge(getAreaLabel(portal.to));
-    // Na caverna: névoa mais fechada e luz mais baixa (sensação de interior)
-    if (portal.to === AREA.CAVE) {
-      scene.fog.density = 0.045;
-      if (ambientLight) ambientLight.intensity = Math.min(ambientLight.intensity, 0.22);
-    }
   });
   if (ok) {
     showNotification(getAreaLabel(portal.to));
@@ -868,29 +1079,132 @@ async function tryUsePortal() {
   return ok;
 }
 
+function enterCaveMinigame() {
+  if (isTransitioning() || isCaveMinigameActive()) return;
+  previousAppState = appState;
+  appState = APP_STATE.CAVE_MINIGAME;
+  exitPlayerPointerLock();
+
+  document.getElementById('controls').classList.add('hidden');
+  document.getElementById('speed-controls').classList.add('hidden');
+  document.getElementById('weapon-hud')?.classList.add('hidden');
+  minigameCanvas.classList.remove('hidden');
+  minigameCanvas.width = window.innerWidth;
+  minigameCanvas.height = window.innerHeight;
+
+  initCaveMinigame(minigameCanvas, state, onExitCaveMinigame);
+}
+
+function onExitCaveMinigame(summary) {
+  Object.entries(summary).forEach(([type, qty]) => {
+    if (qty > 0) state.materials[type] = (state.materials[type] || 0) + qty;
+  });
+
+  minigameCanvas.classList.add('hidden');
+  document.getElementById('controls').classList.remove('hidden');
+  document.getElementById('speed-controls').classList.remove('hidden');
+  document.getElementById('weapon-hud')?.classList.remove('hidden');
+  appState = previousAppState || APP_STATE.PLAYING;
+
+  setPlayerPosition(player, FARM_FROM_CAVE_SPAWN.x, FARM_FROM_CAVE_SPAWN.z);
+  updateAreaBadge(getAreaLabel(getCurrentArea()));
+
+  updateInventoryUI(state, sellCrop, sellProduct, selectActiveSeed);
+  updateHUD(state);
+
+  const collected = Object.entries(summary).filter(([, qty]) => qty > 0);
+  if (collected.length > 0) {
+    const text = collected.map(([type, qty]) => `${qty}× ${type}`).join(', ');
+    showNotification(`Trouxe da caverna: ${text}`);
+  } else {
+    showNotification('Voltou da caverna de mãos vazias.');
+  }
+  playSfx('notification');
+}
+
+function applyFarmingFlag() {
+  const tools = document.getElementById('farm-tools');
+  if (tools) tools.classList.toggle('hidden', !FARMING_ENABLED);
+}
+
+function applyStoryFlag() {
+  if (!PAST_STORY_ENABLED) updateGoalsUI(state, null);
+}
+
+function attachWorldSmoke() {
+  if (houseGroup?.userData?.chimney) {
+    const p = new THREE.Vector3();
+    houseGroup.userData.chimney.getWorldPosition(p);
+    addSmokeEmitter(farmRoot, p.x, p.y + 0.4, p.z, { rate: 3.1, color: 0x4a4844, scale: 0.85, rise: 1.05 });
+  }
+  if (planeWreckGroup) {
+    const local = planeWreckGroup.userData.smokeLocal || new THREE.Vector3(0.2, 1.5, -0.4);
+    const p = local.clone();
+    planeWreckGroup.localToWorld(p);
+    addSmokeEmitter(farmRoot, p.x, p.y, p.z, { rate: 5.6, color: 0x3a3832, scale: 1.4, rise: 1.3 });
+  }
+}
+
+function vfxRoot() {
+  return getCurrentArea() === AREA.LAKE ? lakeRoot : farmRoot;
+}
+
+function villageNpcs() {
+  return [merchantNpc, supplierNpc, govNpc, ...deadVillagers].filter(Boolean);
+}
+
+function overworldPlaceLabel() {
+  if (getCurrentArea() !== AREA.FARM) return getAreaLabel();
+  return player?.mesh?.position?.z > VILLAGE_GATE.z - 2 ? 'Vila' : 'Fazenda';
+}
+
+function onEnemyDamaged(enemy, died) {
+  const p = enemy.mesh.position;
+  const look = player ? getLookDirection(player, camera) : { x: 0, y: 0, z: 0 };
+  spawnBlood(vfxRoot(), p.x, p.y, p.z, { death: died, dir: look });
+  playSfx('flesh_hit');
+  if (died) {
+    poseEnemyCorpse(enemy);
+    playSfx('zombie_die');
+  } else {
+    playSfx('zombie_hurt', { volume: 0.75 });
+  }
+}
+
 function tryInteractNearby() {
   const pos = player.mesh.position;
   const area = getCurrentArea();
+
+  if (tryPickupNearbyWeapon()) return;
+  if (tryPickupNearbyLoot()) return;
+
+  if (area === AREA.BASEMENT) {
+    const note = nearestLoreNote(pos);
+    if (note) { showLoreNote(note); return; }
+  }
 
   if (nearestPortal(pos)) {
     tryUsePortal();
     return;
   }
 
-  if (area === AREA.CAVE) {
-    const mineNode = nearestMineNode(pos);
-    if (mineNode) {
-      tryMineNearby(mineNode);
+  // AREA.CAVE nunca é a área ativa de fato — o portal farm_to_cave abre o
+  // mini-game 2D (ver enterCaveMinigame/tryUsePortal) sem trocar currentArea.
+
+  const npc = nearestInRange(pos, villageNpcs());
+  if (npc) {
+    if (npc.userData.dead) {
+      showNotification(npc.userData.deathHint || 'O corpo está frio. Não há o que fazer.');
+      playSfx('error');
       return;
     }
-    showNotification('Nada próximo para minerar (E).');
+    talkToNpc(npc.userData.npcId);
     return;
   }
 
-  if (area === AREA.VILLAGE) {
-    const npc = nearestInRange(pos, [merchantNpc, supplierNpc, govNpc]);
-    if (npc) {
-      talkToNpc(npc.userData.npcId);
+  if (area === AREA.LAKE) {
+    if (isNearDock(pos)) {
+      tryFishAtDock();
       return;
     }
     showNotification('Nada próximo para interagir (E).');
@@ -908,47 +1222,31 @@ function tryInteractNearby() {
     return;
   }
 
-  if (isNearDock(pos)) {
-    tryFishAtDock();
-    return;
-  }
-
   const animalMesh = nearestInRange(pos, state.animals.map(a => a.mesh));
   if (animalMesh?.userData.animalRef) {
     handleAnimalInteract(animalMesh.userData.animalRef);
     return;
   }
 
-  let nearestPlot = null;
-  let nearestDist = PLAYER_INTERACT_RANGE;
-  farmPlots.forEach(plot => {
-    const wp = new THREE.Vector3();
-    plot.getWorldPosition(wp);
-    const d = Math.hypot(pos.x - wp.x, pos.z - wp.z);
-    if (d < nearestDist) {
-      nearestDist = d;
-      nearestPlot = plot;
+  if (FARMING_ENABLED) {
+    let nearestPlot = null;
+    let nearestDist = PLAYER_INTERACT_RANGE;
+    farmPlots.forEach(plot => {
+      const wp = new THREE.Vector3();
+      plot.getWorldPosition(wp);
+      const d = Math.hypot(pos.x - wp.x, pos.z - wp.z);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearestPlot = plot;
+      }
+    });
+    if (nearestPlot) {
+      smartActionOnPlot(nearestPlot);
+      return;
     }
-  });
-  if (nearestPlot) {
-    smartActionOnPlot(nearestPlot);
-    return;
   }
 
   showNotification('Nada próximo para interagir (E).');
-}
-
-function tryMineNearby(node) {
-  const result = tryMineNode(state, node);
-  if (!result.ok) {
-    if (result.reason === 'energy') return showNotification('Energia insuficiente para minerar.');
-    if (result.reason === 'cooldown') return showNotification('Esse veio ainda está se regenerando.');
-    return showNotification('Não foi possível minerar.');
-  }
-  updateInventoryUI(state, sellCrop, sellProduct, selectActiveSeed);
-  updateHUD(state);
-  showNotification(`Minerou 1× ${result.type}!`);
-  playSfx('harvest');
 }
 
 function tryFishAtDock() {
@@ -1042,62 +1340,147 @@ function handleAnimalInteract(animal) {
   toggleAnimalOutside(animal);
 }
 
-function onCanvasPointerDown(event) {
-  if (event.button === 1 || event.button === 2) return;
-  if (isTransitioning()) return;
-
-  const rect = renderer.domElement.getBoundingClientRect();
-  mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-  mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(mouse, camera);
-
-  const area = getCurrentArea();
-
-  if (area === AREA.FARM) {
-    const animalMeshes = state.animals.map(a => a.mesh);
-    const animalHits = raycaster.intersectObjects(animalMeshes, true);
-    if (animalHits.length > 0) {
-      let obj = animalHits[0].object;
-      while (obj && !obj.userData.animalRef) obj = obj.parent;
-      if (obj && obj.userData.animalRef) {
-        if (!requireNear(obj.position, 'do animal')) return;
-        handleAnimalInteract(obj.userData.animalRef);
-        return;
+function attackWithEquippedWeapon() {
+  const now = Date.now();
+  const weapon = equippedWeapon(state);
+  if (player.reloading) return;
+  if (weapon.kind === 'ranged') {
+    if ((state.mag[weapon.id] || 0) <= 0) {
+      if ((state.ammo[weapon.id] || 0) > 0) {
+        performReload(weapon);
+      } else {
+        showNotification('Sem munição.');
+        playSfx('error');
       }
+      return;
     }
-
-    const intersects = raycaster.intersectObjects(farmPlots, true);
-    if (intersects.length === 0) return;
-
-    let obj = intersects[0].object;
-    while (obj && !obj.userData.isPlot) obj = obj.parent;
-    if (!obj || !obj.userData.isPlot) return;
-
-    const wp = new THREE.Vector3();
-    obj.getWorldPosition(wp);
-    if (!requireNear(wp, 'do canteiro')) return;
-
-    targetPlot = obj;
-    isBatchHolding = false;
-    isHolding = true;
-    holdStartTime = performance.now();
-    document.getElementById('action-progress-container').classList.remove('hidden');
-    const names = { plant: 'Plantando', water: 'Regando', harvest: 'Colhendo', weed: 'Arrancando' };
-    document.getElementById('action-text').textContent = `${names[currentTool]}...`;
+    const pellets = fireWeaponProjectiles(scene, player, camera, now, weapon);
+    if (pellets) {
+      consumeMagShot(state, weapon.id);
+      arrows.push(...pellets);
+      attackAnimTime = 0;
+      kickViewmodel(viewmodel, weapon.id === 'espingarda' ? 1.55 : 1.05);
+      const origin = new THREE.Vector3();
+      camera.getWorldPosition(origin);
+      const dir = new THREE.Vector3();
+      camera.getWorldDirection(dir);
+      origin.addScaledVector(dir, 0.55);
+      spawnSmokePuff(vfxRoot(), origin.x, origin.y, origin.z, {
+        count: weapon.id === 'espingarda' ? 8 : 4,
+        scale: weapon.id === 'espingarda' ? 1.15 : 0.7,
+        color: 0x8a8a82
+      });
+      playSfx('gunshot', { volume: weapon.id === 'espingarda' ? 1.15 : 0.9 });
+      updateWeaponHUD(state);
+    }
     return;
   }
 
-  if (area === AREA.VILLAGE) {
-    const npcHits = raycaster.intersectObjects([merchantNpc, supplierNpc, govNpc], true);
-    if (npcHits.length > 0) {
-      let obj = npcHits[0].object;
-      while (obj && !obj.userData.npcId) obj = obj.parent;
-      if (obj && obj.userData.npcId && obj.visible) {
-        if (!requireNear(obj.position, 'do personagem')) return;
-        talkToNpc(obj.userData.npcId);
-      }
-    }
+  const swing = beginMeleeSwing(player, weapon, now);
+  if (!swing) return;
+  attackAnimTime = 0;
+  kickViewmodel(viewmodel, 1);
+  playSfx('melee_swing');
+  const pos = player.mesh.position;
+  spawnMeleeDust(vfxRoot(), pos.x, pos.y, pos.z);
+}
+
+function tryReloadWeapon() {
+  const weapon = equippedWeapon(state);
+  if (weapon.kind !== 'ranged') {
+    tryRestAtHouse();
+    return;
   }
+  performReload(weapon);
+}
+
+function performReload(weapon) {
+  if (player.reloading) return false;
+  const result = reloadWeapon(state, weapon.id);
+  if (!result.ok) {
+    showNotification(result.reason);
+    playSfx('error');
+    return false;
+  }
+  player.reloading = true;
+  player.reloadUntil = Date.now() + result.duration;
+  playSfx('reload');
+  showNotification('Recarregando...');
+  return true;
+}
+
+function tryPickupNearbyLoot() {
+  const loot = nearestLoot(player.mesh.position, survivalLoot);
+  if (!loot) return false;
+  const type = loot.userData.lootType;
+  const label = collectLoot(state, loot);
+  const idx = survivalLoot.indexOf(loot);
+  if (idx >= 0) survivalLoot.splice(idx, 1);
+  if (type === 'plane_note') {
+    showLoreNote({
+      title: 'Bilhete do piloto',
+      text: 'A carga não chegou. Se alguém achar isso, tem suprimentos no porão da casa perto do celeiro — desviem do lago, tem gente lá.'
+    });
+  } else {
+    showNotification(`Pegou ${label}.`);
+  }
+  playSfx('harvest');
+  updateHUD(state);
+  return true;
+}
+
+function respawnWeaponPickups() {
+  clearWeaponPickups(weaponPickups);
+  weaponPickups = spawnWeaponPickups(farmRoot || scene, state.weaponsOwned || []);
+}
+
+function tryPickupNearbyWeapon() {
+  const pickup = nearestWeaponPickup(player.mesh.position, weaponPickups);
+  if (!pickup) return false;
+  const id = pickup.userData.weaponId;
+  const def = getWeaponDef(id);
+  if (!state.weaponsOwned) state.weaponsOwned = [];
+  if (!state.weaponsOwned.includes(id)) state.weaponsOwned.push(id);
+  tryEquipWeapon(id, true);
+  if (pickup.parent) pickup.parent.remove(pickup);
+  const idx = weaponPickups.indexOf(pickup);
+  if (idx >= 0) weaponPickups.splice(idx, 1);
+  showNotification(`Pegou ${def.name}! Clique esquerdo para usar.`);
+  playSfx('harvest');
+  updateInventoryUI(state, sellCrop, sellProduct, selectActiveSeed);
+  return true;
+}
+
+function tryEquipWeapon(id, silent = false) {
+  const def = getWeaponDef(id);
+  if (def.collectible && !(state.weaponsOwned || []).includes(id)) {
+    if (!silent) showNotification(`Você ainda não encontrou: ${def.name}.`);
+    return false;
+  }
+  state.equippedWeapon = def.id;
+  if (viewmodel) setViewmodelWeapon(viewmodel, def.id);
+  updateWeaponHUD(state);
+  if (!silent) showNotification(`${def.name} equipada.`);
+  return true;
+}
+
+function cycleEquippedWeapon(dir = 1) {
+  const list = ownedWeapons(state);
+  const current = state.equippedWeapon || 'fists';
+  let idx = list.indexOf(current);
+  if (idx < 0) idx = 0;
+  const next = list[(idx + (dir > 0 ? 1 : -1) + list.length) % list.length];
+  tryEquipWeapon(next, true);
+}
+
+function onCanvasPointerDown(event) {
+  if (event.button !== 0) return;
+  if (isTransitioning()) return;
+  if (document.pointerLockElement !== renderer.domElement) {
+    requestPlayerPointerLock(renderer.domElement);
+    return;
+  }
+  attackWithEquippedWeapon();
 }
 
 function ringAlarm(opts = {}) {
@@ -1106,8 +1489,9 @@ function ringAlarm(opts = {}) {
   alarmBellSwingTime = 0;
   playSfx('bell');
 
-  const inVillage = getCurrentArea() === AREA.VILLAGE;
+  const inVillage = player.mesh.position.z > VILLAGE_GATE.z - 2;
   [merchantNpc, supplierNpc, govNpc].forEach(npc => {
+    if (npc.userData.dead) return;
     if (npc.userData.tookShelter) return;
     if (inVillage) {
       npc.userData.fleeing = true;
@@ -1115,7 +1499,10 @@ function ringAlarm(opts = {}) {
     } else {
       // Fora da vila: abriga instantaneamente (sem animar em instância oculta)
       const home = npc.userData.homeShelter;
-      if (home) npc.position.set(home.x, 0, home.z);
+      if (home) {
+        const groundY = getGroundHeightAt(home.x, home.z, 'farm');
+        npc.position.set(home.x, groundY, home.z);
+      }
       npc.userData.fleeing = false;
       npc.userData.tookShelter = true;
       npc.visible = false;
@@ -1134,6 +1521,7 @@ function toggleAnimalOutside(animal) {
 }
 
 function startAction(tool) {
+  if (!FARMING_ENABLED) return;
   currentTool = tool;
   setActiveTool(tool);
 
@@ -1331,7 +1719,7 @@ function maybeCheckMoneyMilestone() {
   for (const amount of MONEY_MILESTONES) {
     if (state.money >= amount && state.lastMoneyMilestone < amount) {
       state.lastMoneyMilestone = amount;
-      showDialogue('Fazendeiro', farmerLine('moneyMilestone', amount));
+      if (PAST_STORY_ENABLED) showDialogue('Fazendeiro', farmerLine('moneyMilestone', amount));
       break;
     }
   }
@@ -1364,7 +1752,7 @@ function upgradeFarm() {
   state.money -= cost;
   state.farmLevel++;
   crops = crops.filter(c => farmPlots.some(p => p.userData.cropRef === c));
-  rebuildFarmPlots(farmRoot, farmPlots, state.farmLevel);
+  if (FARMING_ENABLED) rebuildFarmPlots(farmRoot, farmPlots, state.farmLevel);
   targetPlot = null;
   updateHUD(state);
   updateUpgradesUI(state);
@@ -1425,21 +1813,23 @@ function advanceSeasonIfNeeded() {
     state.season = newSeason;
     updateHUD(state);
     showNotification(`A estação virou: ${state.season}!`);
-    showDialogue('Fazendeiro', farmerLine('seasonChange', state.season));
+    if (PAST_STORY_ENABLED) showDialogue('Fazendeiro', farmerLine('seasonChange', state.season));
 
     if (state.season === 'Inverno') {
       winterStreakBroken = false;
-      showDialogue('Fazendeiro', farmerLine('winterStart'));
+      if (PAST_STORY_ENABLED) showDialogue('Fazendeiro', farmerLine('winterStart'));
     }
     if (wasWinter) {
       if (!winterStreakBroken) state.goalsProgress.seasonsSurvived++;
     }
 
     const palette = skyPaletteForSeason(state.season);
-    if (groundMesh) {
+    if (groundMesh?.material?.color) {
       const tint = new THREE.Color(palette.grass).lerp(new THREE.Color(0xffffff), 0.45);
       groundMesh.material.color.copy(tint);
-      if (groundMesh.userData.collarMat) groundMesh.userData.collarMat.color.setHex(palette.grass);
+    }
+    if (groundMesh?.userData?.collarMat?.color) {
+      groundMesh.userData.collarMat.color.setHex(palette.grass);
     }
     applySeasonalWorldTint();
   }
@@ -1641,6 +2031,204 @@ function onResize() {
 }
 
 let simTime = 0;
+let debugFrameLogCount = 0;
+
+function debugLog(hypothesisId, message, data = {}, runId = 'initial') {
+  fetch(DEBUG_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Debug-Session-Id': DEBUG_SESSION_ID
+    },
+    body: JSON.stringify({
+      sessionId: DEBUG_SESSION_ID,
+      runId,
+      hypothesisId,
+      location: 'src/js/main.js',
+      message,
+      data,
+      timestamp: Date.now()
+    })
+  }).catch(() => {});
+}
+
+window.addEventListener('error', (event) => {
+  // #region agent log
+  debugLog('H1', 'window.error', {
+    message: event?.message || null,
+    source: event?.filename || null,
+    lineno: event?.lineno || null,
+    colno: event?.colno || null
+  });
+  // #endregion
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  // #region agent log
+  debugLog('H1', 'window.unhandledrejection', {
+    reason: String(event?.reason || 'unknown')
+  });
+  // #endregion
+});
+
+const ENEMY_TYPE_ROLL = [
+  { type: 'Zumbi', weight: 0.42 },
+  { type: 'ZumbiCorredor', weight: 0.30 },
+  { type: 'ZumbiBruto', weight: 0.13 },
+  { type: 'ZumbiRastejante', weight: 0.15 }
+];
+function rollEnemyType() {
+  const r = Math.random();
+  let acc = 0;
+  for (const { type, weight } of ENEMY_TYPE_ROLL) {
+    acc += weight;
+    if (r <= acc) return type;
+  }
+  return 'Zumbi';
+}
+
+/** Spawna/atualiza/anima inimigos noturnos + flechas + dano por contato. Só ativo em áreas de mundo aberto (fazenda/vila). */
+function updateEnemiesAndCombat(isDay, simDelta) {
+  const areaId = getCurrentArea();
+  const isOpenWorldArea = areaId === AREA.FARM || areaId === AREA.VILLAGE || areaId === AREA.LAKE;
+  if (!isOpenWorldArea) return;
+
+  const livingCount = enemies.filter(e => e.state !== 'dead').length;
+  if (!isDay) {
+    if (livingCount < 3) {
+      trySpawnEnemy(areaId);
+    } else {
+      enemySpawnTimer += simDelta * 1000;
+      if (enemySpawnTimer >= ENEMY_SPAWN_CHECK_INTERVAL_MS) {
+        enemySpawnTimer = 0;
+        if (livingCount < ENEMY_MAX_ACTIVE) trySpawnEnemy(areaId);
+      }
+    }
+  }
+
+  const safeZone = { x: HOUSE_POSITION.x, z: HOUSE_POSITION.z, radius: ENEMY_SAFE_ZONE_RADIUS };
+  const playerPos = player.mesh.position;
+  const aiArea = areaId === AREA.LAKE ? AREA.LAKE : AREA.FARM;
+
+  enemies.slice().forEach(enemy => {
+    if (enemy.state === 'dead') {
+      enemy.corpseLife -= simDelta;
+      if (enemy.corpseLife <= 0) removeEnemy(scene, enemies, enemy);
+      return;
+    }
+    const event = updateEnemyAI(enemy, simDelta, playerPos, aiArea, safeZone, { crouched: !!player.crouched });
+    animateEnemy(enemy, simDelta);
+
+    enemy.sfxTimer = (enemy.sfxTimer || 0) - simDelta;
+    if (enemy.sfxTimer <= 0) {
+      const dist = Math.hypot(playerPos.x - enemy.mesh.position.x, playerPos.z - enemy.mesh.position.z);
+      const vol = Math.max(0.08, 1 - dist / 18);
+      enemy.sfxTimer = (enemy.state === 'chasing' || enemy.state === 'attacking')
+        ? 1.8 + Math.random() * 1.6
+        : 4.2 + Math.random() * 3.5;
+      playSfx(enemy.state === 'chasing' || enemy.state === 'attacking' ? 'zombie_agro' : 'zombie_idle', { volume: vol });
+    }
+
+    if (event === 'attack') {
+      playSfx('zombie_attack');
+      applyDamageToPlayer(enemy.damage);
+    }
+  });
+
+  const swing = updateMeleeSwing(player, enemies, simDelta);
+  if (swing.event?.type === 'hit') {
+    const killed = new Set(swing.event.result.killed);
+    swing.event.result.hits.forEach(enemy => onEnemyDamaged(enemy, killed.has(enemy)));
+  }
+
+  const projectileHits = updateArrows(arrows, enemies, simDelta, scene);
+  projectileHits.forEach(hit => onEnemyDamaged(hit.enemy, hit.died));
+
+  if (attackAnimTime != null) {
+    attackAnimTime += simDelta;
+    if (attackAnimTime >= ATTACK_ANIM_DURATION) {
+      attackAnimTime = null;
+    } else {
+      animateAttackHumanoid(player.mesh, attackAnimTime / ATTACK_ANIM_DURATION);
+    }
+  }
+}
+
+function trySpawnEnemy(areaId) {
+  const playerPos = player.mesh.position;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = ENEMY_SPAWN_MIN_DIST_FROM_PLAYER + Math.random() * (ENEMY_SPAWN_MAX_DIST_FROM_PLAYER - ENEMY_SPAWN_MIN_DIST_FROM_PLAYER);
+    const x = playerPos.x + Math.cos(angle) * dist;
+    const z = playerPos.z + Math.sin(angle) * dist;
+
+    if (Math.hypot(x - HOUSE_POSITION.x, z - HOUSE_POSITION.z) < ENEMY_SAFE_ZONE_RADIUS) continue;
+    const bounds = getActiveBounds();
+    if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) continue;
+
+    const spawnArea = areaId === AREA.LAKE ? AREA.LAKE : AREA.FARM;
+    const cleared = avoidObstacles(x, z, 0.5, spawnArea);
+    const type = rollEnemyType();
+    const root = spawnArea === AREA.LAKE ? lakeRoot : farmRoot;
+    const enemy = spawnEnemy(root, type, cleared, spawnArea);
+    enemies.push(enemy);
+    return;
+  }
+}
+
+function applyDamageToPlayer(amount) {
+  const now = Date.now();
+  if (now - (player.lastDamageTime || 0) < PLAYER_DAMAGE_INVULN_MS) return;
+  player.lastDamageTime = now;
+
+  state.playerHealth = Math.max(0, state.playerHealth - amount);
+  applyZombieWound(state).forEach(note => showNotification(note));
+  updateHUD(state);
+  playSfx('error');
+
+  const pos = player.mesh.position;
+  const look = getLookDirection(player, camera);
+  spawnBlood(vfxRoot(), pos.x, pos.y, pos.z, {
+    death: false,
+    count: 6,
+    fromHeight: 1.2,
+    dir: { x: -look.x, y: 0.2, z: -look.z }
+  });
+
+  const flashEl = document.getElementById('damage-flash');
+  flashEl.classList.add('active');
+  setTimeout(() => flashEl.classList.remove('active'), 120);
+
+  if (state.playerHealth <= 0) handlePlayerDeath();
+}
+
+function handlePlayerDeath() {
+  enemies.slice().forEach(e => removeEnemy(scene, enemies, e));
+  clearBlood(farmRoot);
+  if (lakeRoot) clearBlood(lakeRoot);
+
+  state.playerHealth = state.playerMaxHealth;
+  state.energy = Math.max(0, state.energy - PLAYER_RESPAWN_ENERGY_PENALTY);
+  state.bleeding = false;
+  state.infected = false;
+  state.hunger = Math.max(35, state.hunger || 100);
+  state.thirst = Math.max(35, state.thirst || 100);
+  const moneyPenalty = Math.min(PLAYER_RESPAWN_MONEY_PENALTY_CAP, Math.round(state.money * PLAYER_RESPAWN_MONEY_PENALTY_PCT));
+  state.money = Math.max(0, state.money - moneyPenalty);
+
+  if (getCurrentArea() !== AREA.FARM) {
+    forceArea(AREA.FARM, () => {
+      setPlayerPosition(player, HOUSE_POSITION.x, HOUSE_POSITION.z - 2);
+      updateAreaBadge(getAreaLabel(AREA.FARM));
+    });
+  } else {
+    setPlayerPosition(player, HOUSE_POSITION.x, HOUSE_POSITION.z - 2);
+  }
+
+  updateHUD(state);
+  showDialogue('Fazendeiro', 'Os zumbis te derrubaram... Você acordou em casa. Pegue uma arma e tome cuidado na noite.');
+  showNotification(`Desmaiou! -${PLAYER_RESPAWN_ENERGY_PENALTY} energia, -R$ ${moneyPenalty}.`);
+}
 
 function animate() {
   requestAnimationFrame(animate);
@@ -1649,24 +2237,74 @@ function animate() {
   const delta = (now - lastFrameTime) / 1000;
   lastFrameTime = now;
 
+  if (debugFrameLogCount < 3) {
+    const titleScreenEl = document.getElementById('title-screen');
+    const titleShellEl = document.querySelector('.title-shell');
+    // #region agent log
+    debugLog('H4', 'animate.frame', {
+      frame: debugFrameLogCount + 1,
+      appState,
+      delta,
+      cameraPos: camera ? { x: camera.position.x, y: camera.position.y, z: camera.position.z } : null,
+      canvasClient: canvas ? { w: canvas.clientWidth, h: canvas.clientHeight } : null,
+      titleScreen: titleScreenEl ? {
+        className: titleScreenEl.className,
+        display: window.getComputedStyle(titleScreenEl).display,
+        opacity: window.getComputedStyle(titleScreenEl).opacity
+      } : null,
+      titleShell: titleShellEl ? {
+        display: window.getComputedStyle(titleShellEl).display,
+        opacity: window.getComputedStyle(titleShellEl).opacity,
+        rect: titleShellEl.getBoundingClientRect().toJSON ? titleShellEl.getBoundingClientRect().toJSON() : null
+      } : null
+    });
+    // #endregion
+    debugFrameLogCount++;
+  }
+
+  if (appState === APP_STATE.CAVE_MINIGAME) {
+    updateCaveMinigame(delta);
+    renderCaveMinigame(minigameCtx, minigameCanvas.width, minigameCanvas.height);
+    return; // Three.js não renderiza neste frame — economiza GPU.
+  }
+
   if (appState !== APP_STATE.PLAYING) {
-    if (player) updateFollowCamera(camera, player, controls);
+    if (player) updateFollowCamera(camera, player, controls, delta);
     else controls.update();
     composer.render();
     return;
   }
 
+  let moving = false;
   if (!isTransitioning()) {
-    updatePlayerMovement(player, delta, (cost) => {
+    const blockers = [
+      ...enemies.filter(e => e.state !== 'dead').map(e => ({
+        x: e.mesh.position.x, z: e.mesh.position.z, radius: e.type === 'ZumbiBruto' ? 0.48 : 0.36
+      })),
+      ...villageNpcs().filter(n => n.visible !== false).map(n => ({
+        x: n.position.x, z: n.position.z, radius: n.userData.dead ? 0.28 : 0.34
+      }))
+    ];
+    moving = updatePlayerMovement(player, delta, (cost) => {
       if (state.energy > 0) {
         state.energy = Math.max(0, state.energy - cost);
         updateHUD(state);
       }
-    });
+    }, blockers, { energyRatio: state.energy / Math.max(1, state.maxEnergy || 100) });
+    const pos = player.mesh.position;
+    if (player.stepEvent) {
+      spawnDust(vfxRoot(), pos.x, pos.y, pos.z, {
+        count: player.sprintFactor > 0.4 ? 5 : 3,
+        burst: player.sprintFactor > 0.55,
+        color: 0x7a6a4e
+      });
+    }
+    if (player.justLanded) {
+      spawnDust(vfxRoot(), pos.x, pos.y, pos.z, { count: 8, burst: true, spread: 0.45, color: 0x6a5a40 });
+    }
   }
-  updateFollowCamera(camera, player, controls);
+  updateFollowCamera(camera, player, controls, delta);
 
-  if (getCurrentArea() === AREA.CAVE) updateCaveNodes(Date.now());
   const fishResult = updateFishing(state, Date.now());
   if (fishResult?.done) {
     updateInventoryUI(state, sellCrop, sellProduct, selectActiveSeed);
@@ -1679,17 +2317,33 @@ function animate() {
     const areaId = getCurrentArea();
     const markers = getMinimapMarkers(areaId);
     if (areaId === AREA.FARM) {
-      markers.village = VILLAGE_GATE;
+      markers.village = VILLAGE_PLAZA;
       markers.villageGate = true;
     }
-    updateMinimap(player.mesh.position, markers, getActiveBounds(), getAreaLabel(areaId));
+    updateMinimap(player.mesh.position, markers, getActiveBounds(), overworldPlaceLabel());
+    updateAreaBadge(overworldPlaceLabel());
   }
 
   const simDelta = delta * timeScale;
   simTime += simDelta;
+  animateWeaponPickups(weaponPickups, simTime);
+  animateSurvivalLoot(survivalLoot, simTime);
+
+  if (player.reloading && Date.now() >= (player.reloadUntil || 0)) {
+    player.reloading = false;
+    updateWeaponHUD(state);
+    showNotification('Pronto.');
+  }
+
+  const survivalEvents = tickSurvival(state, simDelta);
+  if (survivalEvents.includes('dot')) {
+    updateHUD(state);
+    if (state.playerHealth <= 0) handlePlayerDeath();
+  }
 
   const onFarm = getCurrentArea() === AREA.FARM;
   updateWind(windSystem, simDelta);
+  tickWeather(simDelta, windSystem?.strength || 0.7);
   applyWindEffects({
     wind: windSystem,
     treesGroup: onFarm ? treesGroup : null,
@@ -1700,11 +2354,12 @@ function animate() {
   });
 
   worldTime = (worldTime + simDelta * 7) % 1440;
+  if (worldTime >= 5 * 60 && worldTime < 20 * 60) worldTime = 20 * 60;
   const hours = Math.floor(worldTime / 60);
   const minutes = Math.floor(worldTime % 60);
   const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-  const isDay = hours >= 6 && hours < 19;
-  const isDawnDusk = (hours >= 5 && hours < 7) || (hours >= 17 && hours < 19);
+  const isDay = false;
+  const isDawnDusk = false;
 
   const npcChair = houseGroup.userData.npc;
   const sleepIndicator = houseGroup.userData.sleepIndicator;
@@ -1783,37 +2438,31 @@ function animate() {
     moonMesh.scale.setScalar(THREE.MathUtils.lerp(1.1, 0.4, dayFactor));
   }
 
-  sunLight.intensity = THREE.MathUtils.lerp(0.05, isDawnDusk ? 2.8 : 3.6, dayFactor);
+  sunLight.intensity = THREE.MathUtils.lerp(0.05, isDawnDusk ? 2.55 : 3.2, dayFactor);
   sunLight.color.setHex(isDawnDusk ? 0xffb06a : 0xfff0c8);
-  moonLight.intensity = THREE.MathUtils.lerp(0.55, 0, dayFactor);
-  ambientLight.intensity = THREE.MathUtils.lerp(0.16, 0.42, dayFactor);
-  hemiLight.intensity = THREE.MathUtils.lerp(0.18, 0.55, dayFactor);
-  fillLight.intensity = THREE.MathUtils.lerp(0.18, 0.35, dayFactor);
+  moonLight.intensity = THREE.MathUtils.lerp(1.15 + Math.sin(simTime * 0.12) * 0.18, 0, dayFactor);
+  ambientLight.intensity = THREE.MathUtils.lerp(0.16, 0.38, dayFactor);
+  hemiLight.intensity = THREE.MathUtils.lerp(0.22, 0.48, dayFactor);
+  fillLight.intensity = THREE.MathUtils.lerp(0.12, 0.28, dayFactor);
 
   const seasonSky = skyPaletteForSeason(state.season);
-  const skyTop = new THREE.Color(isDawnDusk ? 0xe6853e : seasonSky.top).lerp(new THREE.Color(0x050818), 1 - dayFactor);
-  const skyBottom = new THREE.Color(isDawnDusk ? 0xffd49a : seasonSky.bottom).lerp(new THREE.Color(0x161b30), 1 - dayFactor);
+  const nightTop = new THREE.Color(0x06101c);
+  const nightBottom = new THREE.Color(0x121820);
+  const skyTop = new THREE.Color(isDawnDusk ? 0xe6853e : seasonSky.top).lerp(nightTop, 1 - dayFactor);
+  const skyBottom = new THREE.Color(isDawnDusk ? 0xffd49a : seasonSky.bottom).lerp(nightBottom, 1 - dayFactor);
   skyUniforms.topColor.value.lerp(skyTop, 0.05);
   skyUniforms.bottomColor.value.lerp(skyBottom, 0.05);
   scene.fog.color.copy(skyUniforms.bottomColor.value);
-  // Névoa: dia limpo, amanhecer/pôr do sol um pouco mais densa, noite mais fechada.
-  const fogDay = 0.0028;
-  const fogDusk = 0.006;
-  const fogNight = 0.02;
-  const fogTarget = isDawnDusk
+  const fogDay = 0.0025;
+  const fogDusk = 0.0048;
+  const fogNight = 0.0155 + Math.sin(simTime * 0.18) * 0.0035;
+  const fogTarget = (isDawnDusk
     ? THREE.MathUtils.lerp(fogNight, fogDusk, dayFactor)
-    : THREE.MathUtils.lerp(fogNight, fogDay, dayFactor);
-  scene.fog.density = getCurrentArea() === AREA.CAVE ? 0.05 : fogTarget;
-  if (getCurrentArea() === AREA.CAVE) {
-    sunLight.intensity *= 0.15;
-    ambientLight.intensity = Math.max(ambientLight.intensity, 0.2);
-    hemiLight.intensity *= 0.35;
-    if (sunMesh) sunMesh.visible = false;
-    if (moonMesh) moonMesh.visible = false;
-  }
+    : THREE.MathUtils.lerp(fogNight, fogDay, dayFactor)) * weatherFogMul();
+  scene.fog.density = THREE.MathUtils.damp(scene.fog.density, fogTarget, 1.2, simDelta);
 
   // Contraste de exposição no ciclo (amanhecer/pôr do sol mais quente)
-  renderer.toneMappingExposure = THREE.MathUtils.lerp(1.05, isDawnDusk ? 1.35 : 1.28, dayFactor);
+  renderer.toneMappingExposure = THREE.MathUtils.lerp(0.78, isDawnDusk ? 1.22 : 1.18, dayFactor);
 
   // Olhos espreitando na mata e lampião da varanda só aparecem/acendem à noite
   if (treesGroup && treesGroup.userData.eyesGroup) {
@@ -1822,8 +2471,8 @@ function animate() {
   const lantern = houseGroup.userData.lantern;
   if (lantern) {
     const nightGlow = 1 - dayFactor;
-    lantern.light.intensity = THREE.MathUtils.lerp(0, 1.6, nightGlow);
-    lantern.glassMat.emissiveIntensity = THREE.MathUtils.lerp(0, 1.2, nightGlow);
+    lantern.light.intensity = THREE.MathUtils.lerp(0, 2.4, nightGlow);
+    lantern.glassMat.emissiveIntensity = THREE.MathUtils.lerp(0, 1.6, nightGlow);
   }
 
   // Transição dia/noite controla soltar/prender: ao amanhecer os animais saem
@@ -1844,6 +2493,7 @@ function animate() {
     updateHUD(state);
 
     villagerNpcs.forEach(npc => {
+      if (npc.userData.dead) return;
       npc.userData.tookShelter = false;
       npc.userData.fleeing = false;
       const stand = npc.userData.standPosition;
@@ -1857,19 +2507,24 @@ function animate() {
     state.totalDays++;
     advanceSeasonIfNeeded();
     applySeasonalWorldTint();
+
+    // Inimigos noturnos "voltam à escuridão" com a luz do dia.
+    enemies.slice().forEach(e => removeEnemy(scene, enemies, e));
+    clearBlood(farmRoot);
+    if (lakeRoot) clearBlood(lakeRoot);
   }
   if (!isDay && wasDay) {
     ringAlarm({ quiet: true });
     const outsideCount = state.animals.filter(a => a.isOutside).length;
     if (outsideCount > 0) {
       showNotification(`Sino da vila! ${outsideCount} animal(is) ainda fora do curral — cuidado com o lobo.`);
-      showDialogue('Fazendeiro', farmerLine('duskAnimalsOut', outsideCount));
+      if (PAST_STORY_ENABLED) showDialogue('Fazendeiro', farmerLine('duskAnimalsOut', outsideCount));
       winterStreakBroken = true;
     } else {
       showNotification('O sino da vila tocou! Os moradores correm para abrigo.');
       state.goalsProgress.safeNights++;
       if (state.goalsProgress.safeNights % 3 === 0) {
-        showDialogue('Fazendeiro', farmerLine('safeNight', state.goalsProgress.safeNights));
+        if (PAST_STORY_ENABLED) showDialogue('Fazendeiro', farmerLine('safeNight', state.goalsProgress.safeNights));
       }
     }
   }
@@ -1884,6 +2539,27 @@ function animate() {
   const anyOutside = state.animals.some(a => a.isOutside);
   wolf.visible = !isDay && anyOutside;
   if (wolf.visible) updateWolfPatrol(wolf, simDelta, simTime);
+
+  updateEnemiesAndCombat(isDay, simDelta);
+  const fxRoot = vfxRoot();
+  updateBlood(simDelta, fxRoot);
+  updateParticles(simDelta, fxRoot, { wind: windSystem, playerPos: player?.mesh?.position });
+  if (lakeGroup?.userData?.animateLake) lakeGroup.userData.animateLake(simTime);
+  if (!isTransitioning()) {
+    const swingProgress = player.meleeSwing
+      ? Math.min(1, player.meleeSwing.elapsed / player.meleeSwing.duration)
+      : (attackAnimTime != null ? attackAnimTime / ATTACK_ANIM_DURATION : 0);
+    updateViewmodel(viewmodel, delta, moving, swingProgress, {
+      aiming: !!player.aiming && equippedWeapon(state).kind === 'ranged',
+      reloading: !!player.reloading,
+      reloadT: player.reloading ? 1 - Math.max(0, (player.reloadUntil - Date.now()) / 1800) : 0,
+      crouched: !!player.crouched,
+      airborne: !player.onGround,
+      sprinting: (player.sprintFactor || 0) > 0.4,
+      landDip: player.landDip || 0,
+      time: simTime
+    });
+  }
 
   state.animals.forEach(animal => {
     const bounds = animal.isOutside
@@ -1902,38 +2578,36 @@ function animate() {
     }
   });
 
-  // Idle / fuga dos NPCs — só quando a vila está ativa
-  const inVillage = getCurrentArea() === AREA.VILLAGE;
-  if (inVillage) {
-    [merchantNpc, supplierNpc, govNpc].forEach(npc => {
-      if (npc.visible && !npc.userData.fleeing) animateIdleHumanoid(npc, simTime);
-    });
+  // NPCs da vila (agora no mesmo mapa da fazenda)
+  [merchantNpc, supplierNpc, govNpc].forEach(npc => {
+    if (npc.userData.dead) return;
+    if (npc.visible && !npc.userData.fleeing) animateIdleHumanoid(npc, simTime);
+  });
 
-    villagerNpcs.forEach(npc => {
-      if (!npc.userData.fleeing) return;
-      const target = npc.userData.fleeTarget;
-      const dx = target.x - npc.position.x;
-      const dz = target.z - npc.position.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
+  villagerNpcs.forEach(npc => {
+    if (npc.userData.dead || !npc.userData.fleeing) return;
+    const target = npc.userData.fleeTarget;
+    const dx = target.x - npc.position.x;
+    const dz = target.z - npc.position.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
 
-      if (dist < 1.6) {
-        npc.userData.fleeing = false;
-        npc.userData.tookShelter = true;
-        npc.visible = false;
-        return;
-      }
+    if (dist < 1.6) {
+      npc.userData.fleeing = false;
+      npc.userData.tookShelter = true;
+      npc.visible = false;
+      return;
+    }
 
-      const fleeSpeed = 3.4;
-      const step = Math.min(dist, fleeSpeed * simDelta);
-      const nextX = npc.position.x + (dx / dist) * step;
-      const nextZ = npc.position.z + (dz / dist) * step;
-      const cleared = avoidObstacles(nextX, nextZ, 0.28, 'village');
-      npc.position.x = cleared.x;
-      npc.position.z = cleared.z;
-      npc.rotation.y = Math.atan2(dx, dz);
-      animateWalkHumanoid(npc, simTime, fleeSpeed);
-    });
-  }
+    const fleeSpeed = 3.4;
+    const step = Math.min(dist, fleeSpeed * simDelta);
+    const nextX = npc.position.x + (dx / dist) * step;
+    const nextZ = npc.position.z + (dz / dist) * step;
+    const cleared = avoidObstacles(nextX, nextZ, 0.28, 'farm');
+    npc.position.x = cleared.x;
+    npc.position.z = cleared.z;
+    npc.rotation.y = Math.atan2(dx, dz);
+    animateWalkHumanoid(npc, simTime, fleeSpeed);
+  });
 
   if (!isDay) {
     wolfRiskTimer += simDelta * 1000;
@@ -1946,12 +2620,12 @@ function animate() {
           removeAnimal(scene, state.animals, animal);
           state.goalsProgress.animalsLostTotal++;
           showNotification(`O lobo mau pegou sua ${animal.type.toLowerCase()}! 🐺`);
-          showDialogue('Fazendeiro', farmerLine('wolfAttack', animal.type.toLowerCase()));
+          if (PAST_STORY_ENABLED) showDialogue('Fazendeiro', farmerLine('wolfAttack', animal.type.toLowerCase()));
           updateUpgradesUI(state);
         }
       });
 
-      villagerNpcs.filter(npc => npc.visible && !npc.userData.tookShelter).forEach(npc => {
+      villagerNpcs.filter(npc => !npc.userData.dead && npc.visible && !npc.userData.tookShelter).forEach(npc => {
         if (Math.random() < riskChance) {
           npc.visible = false;
           npc.userData.fleeing = false;
@@ -1972,7 +2646,7 @@ function animate() {
     }
   }
 
-  if (isHolding) {
+  if (FARMING_ENABLED && isHolding) {
     const duration = isBatchHolding ? BATCH_HOLD_DURATION_MS : HOLD_DURATION_MS;
     const heldTime = now - holdStartTime;
     const progress = Math.min(100, (heldTime / duration) * 100);
@@ -1988,6 +2662,7 @@ function animate() {
     }
   }
 
+  if (FARMING_ENABLED) {
   const seasonGrowthMultiplier = growthMultiplierForSeason(state.season);
   crops.forEach(crop => {
     const data = crop.userData;
@@ -2015,30 +2690,35 @@ function animate() {
       }
     }
   }
+  }
 
   goalCheckTimer += simDelta * 1000;
   if (goalCheckTimer >= 1000) {
     goalCheckTimer = 0;
-    const completed = checkGoals(state);
-    if (completed) {
-      showNotification(completed.completeMessage);
-      updateHUD(state);
-      updateUpgradesUI(state);
-    }
-    const activeGoal = getActiveGoal(state);
-    if (activeGoal && activeGoal.id !== lastGoalId) {
-      lastGoalId = activeGoal.id;
-      showChapterIntro(activeGoal);
-    }
-    updateGoalsUI(state, activeGoal);
+    if (PAST_STORY_ENABLED) {
+      const completed = checkGoals(state);
+      if (completed) {
+        showNotification(completed.completeMessage);
+        updateHUD(state);
+        updateUpgradesUI(state);
+      }
+      const activeGoal = getActiveGoal(state);
+      if (activeGoal && activeGoal.id !== lastGoalId) {
+        lastGoalId = activeGoal.id;
+        showChapterIntro(activeGoal);
+      }
+      updateGoalsUI(state, activeGoal);
 
-    if (!state.specialOrder && Math.random() < 0.15) {
-      state.specialOrder = generateSpecialOrder(state.npcFlags.merchant.friendship);
-      showNotification('Novo pedido especial disponível! Fale com Seu Tobias.');
-    }
-    if (!state.supplierOrder && Math.random() < 0.1) {
-      state.supplierOrder = generateSupplierOrder();
-      showNotification('Dona Rosa tem um pedido! Fale com ela.');
+      if (!state.specialOrder && Math.random() < 0.15) {
+        state.specialOrder = generateSpecialOrder(state.npcFlags.merchant.friendship);
+        showNotification('Novo pedido especial disponível! Fale com Seu Tobias.');
+      }
+      if (!state.supplierOrder && Math.random() < 0.1) {
+        state.supplierOrder = generateSupplierOrder();
+        showNotification('Dona Rosa tem um pedido! Fale com ela.');
+      }
+    } else {
+      updateGoalsUI(state, null);
     }
   }
 
@@ -2049,13 +2729,20 @@ function animate() {
     const area = getCurrentArea();
     let hint = '';
     const portal = nearestPortal(pos);
-    if (portal) hint = portal.hint;
-    else if (area === AREA.CAVE && nearestMineNode(pos)) hint = 'E — Minerar';
-    else if (area === AREA.VILLAGE && nearestInRange(pos, [merchantNpc, supplierNpc, govNpc])) hint = 'E — Conversar';
+    const weaponNear = nearestWeaponPickup(pos, weaponPickups);
+    const lootNear = nearestLoot(pos, survivalLoot);
+    if (weaponNear) hint = `E — Pegar ${getWeaponDef(weaponNear.userData.weaponId).name}`;
+    else if (lootNear) hint = `E — Pegar ${lootLabel(lootNear.userData.lootType)}`;
+    else if (area === AREA.BASEMENT && nearestLoreNote(pos)) hint = `E — Ler: ${nearestLoreNote(pos).title}`;
+    else if (portal) hint = portal.hint;
+    else if (nearestInRange(pos, villageNpcs())) {
+      const npc = nearestInRange(pos, villageNpcs());
+      hint = npc.userData.dead ? 'E — Examinar corpo' : 'E — Conversar';
+    }
+    else if (area === AREA.LAKE && isNearDock(pos)) hint = isFishing() ? 'Pescando...' : 'E — Pescar';
     else if (area === AREA.FARM) {
       if (isInRange(pos, BARN_POSITION, 4.0) && canCraftFeed(state)) hint = 'E / C — Craftar ração';
-      else if (isInRange(pos, HOUSE_POSITION, HOUSE_REST_RANGE) && !state.restedToday) hint = 'E / R — Descansar';
-      else if (isNearDock(pos)) hint = isFishing() ? 'Pescando...' : 'E — Pescar';
+      else if (isInRange(pos, HOUSE_POSITION, HOUSE_REST_RANGE) && !state.restedToday) hint = 'E — Descansar';
       else if (nearestInRange(pos, state.animals.map(a => a.mesh))) {
         const nearMesh = nearestInRange(pos, state.animals.map(a => a.mesh));
         const animal = nearMesh?.userData?.animalRef;
@@ -2066,6 +2753,15 @@ function animate() {
     }
     hintEl.textContent = hint;
     hintEl.classList.toggle('hidden', !hint);
+  }
+
+  const lookPrompt = document.getElementById('look-prompt');
+  const crosshair = document.getElementById('crosshair');
+  const locked = !!player?.pointerLocked;
+  if (lookPrompt) lookPrompt.classList.toggle('hidden', appState !== APP_STATE.PLAYING || locked);
+  if (crosshair) {
+    crosshair.classList.toggle('hidden', appState !== APP_STATE.PLAYING || !locked);
+    crosshair.classList.toggle('ads', !!player?.aiming);
   }
 
   composer.render();

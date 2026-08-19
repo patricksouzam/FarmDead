@@ -311,6 +311,12 @@ export const icons = {
   <path d="M13 2L11 10H15L10 22L11 13H8L13 2Z" fill="#ffdf7a" opacity="0.6"/>
 </svg>`,
 
+  heart: `
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12 20.5C12 20.5 3 15 3 8.8C3 5.6 5.5 3.5 8.2 3.5C10 3.5 11.3 4.5 12 5.8C12.7 4.5 14 3.5 15.8 3.5C18.5 3.5 21 5.6 21 8.8C21 15 12 20.5 12 20.5Z" fill="#d84a4a"/>
+  <path d="M12 19C12 19 5 14.2 5 9C5 6.6 6.8 5 8.8 5C10.2 5 11.2 5.8 12 6.9C12 6.9 12 6.9 12 6.9V19Z" fill="#f06060" opacity="0.55"/>
+</svg>`,
+
   graphics: `
 <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
   <rect x="2.5" y="4" width="19" height="13" rx="1.2" fill="#3a4890"/>

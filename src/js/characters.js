@@ -281,6 +281,33 @@ export function animateWalkHumanoid(mesh, t, speed) {
   }
 }
 
+/** Pose rastejante: torso rente ao solo, braços/pernas em padrão de arrasto. */
+export function animateCrawlHumanoid(mesh, t, moving) {
+  const rig = mesh.userData.rig;
+  if (!rig) return;
+  const step = t * (moving ? 3.4 : 1.2);
+  const left = Math.sin(step);
+  const right = Math.sin(step + Math.PI);
+
+  rig.torsoRoot.rotation.z = Math.sin(step * 0.5) * 0.05;
+  rig.torsoRoot.position.y = moving ? Math.abs(Math.sin(step * 2)) * 0.02 : 0;
+
+  if (rig.leftArm) { rig.leftArm.rotation.x = -0.3 + left * 0.5; rig.leftArm.rotation.z = 0.15; }
+  if (rig.rightArm) { rig.rightArm.rotation.x = -0.3 + right * 0.5; rig.rightArm.rotation.z = -0.15; }
+  if (rig.leftElbow) rig.leftElbow.rotation.x = 1.1 + Math.max(0, left) * 0.3;
+  if (rig.rightElbow) rig.rightElbow.rotation.x = 1.1 + Math.max(0, right) * 0.3;
+
+  if (rig.leftLeg) rig.leftLeg.rotation.x = right * 0.35;
+  if (rig.rightLeg) rig.rightLeg.rotation.x = left * 0.35;
+  if (rig.leftKnee) rig.leftKnee.rotation.x = 0.9 + Math.max(0, -right) * 0.3;
+  if (rig.rightKnee) rig.rightKnee.rotation.x = 0.9 + Math.max(0, -left) * 0.3;
+
+  if (rig.headPivot) {
+    rig.headPivot.rotation.x = -0.5;
+    rig.headPivot.rotation.y = Math.sin(t * 0.6) * 0.15;
+  }
+}
+
 /** Pose de salto: braços abertos, pernas recolhidas no ar. */
 export function animateJumpHumanoid(mesh, vy) {
   const rig = mesh.userData.rig;
@@ -314,4 +341,104 @@ export function animateJumpHumanoid(mesh, vy) {
     rig.headPivot.rotation.x = rising ? -0.15 : 0.2;
     rig.headPivot.rotation.y = 0;
   }
+}
+
+/** Swing de ataque: braço direito golpeia de cima para baixo. progress: 0..1. */
+export function animateAttackHumanoid(mesh, progress) {
+  const rig = mesh.userData.rig;
+  if (!rig) return;
+  const swing = Math.sin(Math.min(progress, 1) * Math.PI);
+  if (rig.rightArm) {
+    rig.rightArm.rotation.x = -1.2 + swing * 1.6;
+    rig.rightArm.rotation.z = -0.3 * swing;
+  }
+  if (rig.rightElbow) rig.rightElbow.rotation.x = 0.3 + swing * 0.5;
+  rig.torsoRoot.rotation.y = swing * 0.15;
+}
+
+function snapshotTransform(transform) {
+  if (!transform) return null;
+  return {
+    px: transform.position.x,
+    py: transform.position.y,
+    pz: transform.position.z,
+    rx: transform.rotation.x,
+    ry: transform.rotation.y,
+    rz: transform.rotation.z,
+    sx: transform.scale.x,
+    sy: transform.scale.y,
+    sz: transform.scale.z
+  };
+}
+
+function applyTransformSnapshot(transform, snap) {
+  if (!transform || !snap) return;
+  transform.position.set(snap.px, snap.py, snap.pz);
+  transform.rotation.set(snap.rx, snap.ry, snap.rz);
+  transform.scale.set(snap.sx, snap.sy, snap.sz);
+}
+
+function lerpTransformSnapshot(from, to, alpha) {
+  if (!from && !to) return null;
+  if (!from) return to;
+  if (!to) return from;
+  return {
+    px: THREE.MathUtils.lerp(from.px, to.px, alpha),
+    py: THREE.MathUtils.lerp(from.py, to.py, alpha),
+    pz: THREE.MathUtils.lerp(from.pz, to.pz, alpha),
+    rx: THREE.MathUtils.lerp(from.rx, to.rx, alpha),
+    ry: THREE.MathUtils.lerp(from.ry, to.ry, alpha),
+    rz: THREE.MathUtils.lerp(from.rz, to.rz, alpha),
+    sx: THREE.MathUtils.lerp(from.sx, to.sx, alpha),
+    sy: THREE.MathUtils.lerp(from.sy, to.sy, alpha),
+    sz: THREE.MathUtils.lerp(from.sz, to.sz, alpha)
+  };
+}
+
+export function snapshotHumanoidPose(mesh) {
+  const rig = mesh.userData.rig;
+  if (!rig) return null;
+  return {
+    torsoRoot: snapshotTransform(rig.torsoRoot),
+    headPivot: snapshotTransform(rig.headPivot),
+    leftArm: snapshotTransform(rig.leftArm),
+    rightArm: snapshotTransform(rig.rightArm),
+    leftLeg: snapshotTransform(rig.leftLeg),
+    rightLeg: snapshotTransform(rig.rightLeg),
+    leftKnee: snapshotTransform(rig.leftKnee),
+    rightKnee: snapshotTransform(rig.rightKnee),
+    leftElbow: snapshotTransform(rig.leftElbow),
+    rightElbow: snapshotTransform(rig.rightElbow)
+  };
+}
+
+export function applyHumanoidPose(mesh, pose) {
+  const rig = mesh.userData.rig;
+  if (!rig || !pose) return;
+  applyTransformSnapshot(rig.torsoRoot, pose.torsoRoot);
+  applyTransformSnapshot(rig.headPivot, pose.headPivot);
+  applyTransformSnapshot(rig.leftArm, pose.leftArm);
+  applyTransformSnapshot(rig.rightArm, pose.rightArm);
+  applyTransformSnapshot(rig.leftLeg, pose.leftLeg);
+  applyTransformSnapshot(rig.rightLeg, pose.rightLeg);
+  applyTransformSnapshot(rig.leftKnee, pose.leftKnee);
+  applyTransformSnapshot(rig.rightKnee, pose.rightKnee);
+  applyTransformSnapshot(rig.leftElbow, pose.leftElbow);
+  applyTransformSnapshot(rig.rightElbow, pose.rightElbow);
+}
+
+export function blendHumanoidPose(fromPose, toPose, alpha) {
+  if (!fromPose || !toPose) return toPose || fromPose || null;
+  return {
+    torsoRoot: lerpTransformSnapshot(fromPose.torsoRoot, toPose.torsoRoot, alpha),
+    headPivot: lerpTransformSnapshot(fromPose.headPivot, toPose.headPivot, alpha),
+    leftArm: lerpTransformSnapshot(fromPose.leftArm, toPose.leftArm, alpha),
+    rightArm: lerpTransformSnapshot(fromPose.rightArm, toPose.rightArm, alpha),
+    leftLeg: lerpTransformSnapshot(fromPose.leftLeg, toPose.leftLeg, alpha),
+    rightLeg: lerpTransformSnapshot(fromPose.rightLeg, toPose.rightLeg, alpha),
+    leftKnee: lerpTransformSnapshot(fromPose.leftKnee, toPose.leftKnee, alpha),
+    rightKnee: lerpTransformSnapshot(fromPose.rightKnee, toPose.rightKnee, alpha),
+    leftElbow: lerpTransformSnapshot(fromPose.leftElbow, toPose.leftElbow, alpha),
+    rightElbow: lerpTransformSnapshot(fromPose.rightElbow, toPose.rightElbow, alpha)
+  };
 }

@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:7299">
 <title>Fazenda 3D</title>
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
@@ -17,36 +17,76 @@
 <body>
 
 <div id="hud">
-  <canvas id="minimap" width="160" height="160" aria-label="Minimapa do mundo"></canvas>
-  <div class="pill">
-    <span class="icon" data-icon="money"></span>
-    <div><p class="label">Dinheiro</p><p id="money-display" class="value">R$ 300</p></div>
-  </div>
-  <div class="pill">
-    <span class="icon" data-icon="water"></span>
-    <div><p class="label">Água</p><p id="water-display" class="value">100 / 100</p></div>
-  </div>
-  <div class="pill">
-    <span class="icon" id="time-icon" data-icon="sun"></span>
-    <div><p class="label">Hora</p><p id="time-display" class="value">06:40</p></div>
-  </div>
-  <div class="pill">
-    <span class="icon" data-icon="upgrades"></span>
-    <div>
-      <p class="label">Estação</p>
-      <p id="season-display" class="value">Primavera</p>
-      <p id="season-days-display" class="subvalue">7 dias · depois Verão</p>
+  <div class="hud-left">
+    <canvas id="minimap" width="160" height="160" aria-label="Minimapa do mundo"></canvas>
+    <div class="hud-vitals">
+      <div class="hud-stat pill" id="health-pill">
+        <span class="icon" data-icon="heart"></span>
+        <div class="hud-stat-body">
+          <p class="label">Vida</p>
+          <div class="stat-track"><div id="health-bar" class="stat-fill stat-fill-health"></div></div>
+          <p id="health-display" class="value">100 / 100</p>
+        </div>
+      </div>
+      <div class="hud-stat pill">
+        <span class="icon" data-icon="energy"></span>
+        <div class="hud-stat-body">
+          <p class="label">Energia</p>
+          <div class="stat-track"><div id="energy-bar" class="stat-fill stat-fill-energy"></div></div>
+          <p id="energy-display" class="value">100 / 100</p>
+        </div>
+      </div>
+      <div class="hud-stat pill">
+        <span class="icon" data-icon="wheat"></span>
+        <div class="hud-stat-body">
+          <p class="label">Fome</p>
+          <div class="stat-track"><div id="hunger-bar" class="stat-fill stat-fill-hunger"></div></div>
+          <p id="hunger-display" class="value">100 / 100</p>
+        </div>
+      </div>
+      <div class="hud-stat pill">
+        <span class="icon" data-icon="water"></span>
+        <div class="hud-stat-body">
+          <p class="label">Sede</p>
+          <div class="stat-track"><div id="thirst-bar" class="stat-fill stat-fill-thirst"></div></div>
+          <p id="thirst-display" class="value">100 / 100</p>
+        </div>
+      </div>
     </div>
-  </div>
-  <div class="pill">
-    <span class="icon" data-icon="energy"></span>
-    <div><p class="label">Energia</p><p id="energy-display" class="value">100 / 100</p></div>
+    <div id="status-flags" class="status-flags hidden"></div>
+    <div class="hud-resources">
+      <div class="hud-chip pill">
+        <span class="icon" data-icon="money"></span>
+        <div><p class="label">Dinheiro</p><p id="money-display" class="value">R$ 300</p></div>
+      </div>
+      <div class="hud-chip pill">
+        <span class="icon" data-icon="water"></span>
+        <div><p class="label">Água</p><p id="water-display" class="value">100 / 100</p></div>
+      </div>
+    </div>
   </div>
 </div>
 
+<div id="hud-clock" class="hidden">
+  <span class="icon" id="time-icon" data-icon="sun"></span>
+  <div>
+    <p id="time-display" class="value">21:20</p>
+    <p id="season-display" class="label">Primavera</p>
+    <p id="season-days-display" class="subvalue">7 dias · depois Verão</p>
+  </div>
+</div>
+
+<div id="crosshair" class="hidden"></div>
+<div id="look-prompt" class="hidden">Clique para olhar · WASD mover · Ctrl agachar · Botão direito mirar · R recarregar</div>
+<div id="weapon-hud" class="hidden">
+  <p id="weapon-name">Punhos</p>
+  <p id="weapon-ammo" class="hidden">7 / 14</p>
+  <p id="weapon-hint">Explore a fazenda e pegue armas no chão (E)</p>
+</div>
 <div id="crosshair-hint" class="hidden"></div>
 <div id="area-badge">Fazenda</div>
 <div id="area-fade" aria-hidden="true"></div>
+<div id="damage-flash" aria-hidden="true"></div>
 
 <div id="action-progress-container" class="hidden">
   <div class="action-box">
@@ -56,16 +96,20 @@
 </div>
 
 <div id="controls">
-  <button data-tool="plant" id="btn-plant" class="tool-btn active"><span class="icon" data-icon="plant"></span>Plantar</button>
-  <button data-tool="water" id="btn-water" class="tool-btn"><span class="icon" data-icon="water_tool"></span>Regar</button>
-  <button data-tool="harvest" id="btn-harvest" class="tool-btn"><span class="icon" data-icon="harvest"></span>Colher</button>
-  <button data-tool="weed" id="btn-weed" class="tool-btn"><span class="icon" data-icon="weed"></span>Arrancar</button>
-  <button id="btn-feed" class="menu-btn" type="button"><span class="icon" data-icon="wheat"></span>Ração</button>
-  <button id="btn-rest" class="menu-btn" type="button"><span class="icon" data-icon="energy"></span>Descansar</button>
-  <button id="btn-inventory" class="menu-btn" type="button"><span class="icon" data-icon="egg"></span>Inventário</button>
-  <button id="btn-shop" class="menu-btn"><span class="icon" data-icon="shop"></span>Loja</button>
-  <button id="btn-upgrades" class="menu-btn"><span class="icon" data-icon="upgrades"></span>Melhorias</button>
-  <button id="btn-sleep" class="menu-btn"><span class="icon" data-icon="moon"></span>Dormir</button>
+  <div class="hotbar-group" id="farm-tools">
+    <button data-tool="plant" id="btn-plant" class="tool-btn active"><kbd>1</kbd><span class="icon" data-icon="plant"></span>Plantar</button>
+    <button data-tool="water" id="btn-water" class="tool-btn"><kbd>2</kbd><span class="icon" data-icon="water_tool"></span>Regar</button>
+    <button data-tool="harvest" id="btn-harvest" class="tool-btn"><kbd>3</kbd><span class="icon" data-icon="harvest"></span>Colher</button>
+    <button data-tool="weed" id="btn-weed" class="tool-btn"><kbd>4</kbd><span class="icon" data-icon="weed"></span>Arrancar</button>
+  </div>
+  <div class="hotbar-group">
+    <button id="btn-feed" class="menu-btn" type="button"><span class="icon" data-icon="wheat"></span>Ração</button>
+    <button id="btn-rest" class="menu-btn" type="button"><span class="icon" data-icon="energy"></span>Descansar</button>
+    <button id="btn-inventory" class="menu-btn" type="button"><span class="icon" data-icon="egg"></span>Mochila</button>
+    <button id="btn-shop" class="menu-btn"><span class="icon" data-icon="shop"></span>Loja</button>
+    <button id="btn-upgrades" class="menu-btn"><span class="icon" data-icon="upgrades"></span>Melhorias</button>
+    <button id="btn-sleep" class="menu-btn"><span class="icon" data-icon="moon"></span>Dormir</button>
+  </div>
 </div>
 
 <div id="speed-controls">
@@ -75,7 +119,7 @@
   <button data-speed="3" id="btn-speed-3" class="speed-btn">3x</button>
 </div>
 
-<div id="dusk-warning" class="hidden">🐺 Anoitecendo! O sino da vila toca — recolha os animais.</div>
+<div id="dusk-warning" class="hidden">Os zumbis saíram da mata. Pegue uma arma e sobreviva à noite.</div>
 
 <div id="shop-modal" class="modal hidden">
   <div class="modal-panel">
@@ -148,7 +192,7 @@
     <button class="close-btn" data-close="upgrades-modal"><span class="icon" data-icon="close"></span></button>
     <h2><span class="icon" data-icon="upgrades"></span>Expansão &amp; Garagem</h2>
 
-    <div id="goal-card" class="upgrade-card goal-card">
+    <div id="goal-card" class="upgrade-card goal-card hidden">
       <h3 id="goal-title">Meta Atual</h3>
       <p id="goal-description">—</p>
       <div class="upgrade-row">
@@ -252,7 +296,7 @@
   <div class="title-shell">
     <span class="title-logo-mark">FarmCool</span>
     <h1 class="title-logo">Fazenda 3D</h1>
-    <p class="title-tagline">Cultive, crie animais e explore a fazenda Cube World.<br>WASD andar · Espaço saltar · E portais (caverna / vila)</p>
+    <p class="title-tagline">Sobreviva à noite na fazenda. Clique para olhar, pegue uma arma e cuidado com os zumbis.<br>WASD andar · Mouse olhar · E interagir · Clique atacar</p>
     <div class="title-menu">
       <button id="btn-new-game" class="title-btn title-btn-primary"><span class="icon" data-icon="play"></span>Novo Jogo</button>
       <button id="btn-continue" class="title-btn" disabled><span class="icon" data-icon="save"></span>Continuar</button>
@@ -323,16 +367,13 @@
     <div class="section">
       <h3><span class="icon" style="width:16px;height:16px;" data-icon="keyboard"></span> Controles</h3>
       <ul class="controls-list">
+        <li>Clique no jogo para olhar · mouse fluido na 1ª pessoa</li>
         <li>WASD / setas: andar · Shift: correr · Espaço: saltar</li>
-        <li>E na entrada da caverna / portão da vila: viajar entre áreas</li>
-        <li>1–4: ferramentas · clique curto seleciona · segurar = em lote</li>
-        <li>Scroll: zoom da câmera · botão direito/meio: girar</li>
-        <li>E: interagir (canteiro, NPC, animal, celeiro, casa)</li>
-        <li>Saia pelo portão norte da fazenda até a placa da vila (E para entrar)</li>
-        <li>Siga a trilha oeste até a boca da caverna (E para entrar)</li>
-        <li>Ao anoitecer o sino toca sozinho e os moradores se abrigam</li>
+        <li>Clique esquerdo / Q: atacar · Scroll: trocar arma · E: pegar / interagir</li>
+        <li>1–4: ferramentas · 5–8: armas coletadas</li>
+        <li>E na caverna / portão da vila / lago: viajar</li>
         <li>C: craft no celeiro · R: descansar · F: modo ração</li>
-        <li>ESC: Pausar / Fechar menus</li>
+        <li>ESC: soltar o mouse, depois pausar / fechar menus</li>
       </ul>
     </div>
   </div>
@@ -380,6 +421,7 @@
 </div>
 
 <canvas id="game-canvas"></canvas>
+<canvas id="cave-minigame-canvas" class="hidden"></canvas>
 
 <script type="module">
   import { svgIcon } from './icons/icons.js';
@@ -387,6 +429,67 @@
     el.innerHTML = svgIcon(el.dataset.icon);
   });
 </script>
-<script type="module" src="js/main.js"></script>
+<script type="module">
+  const DEBUG_ENDPOINT = 'http://127.0.0.1:7299/ingest/8bc68156-38f8-493e-9aa8-401dffdaa1b4';
+  const DEBUG_SESSION_ID = '9196a3';
+  const debugLog = (hypothesisId, message, data = {}, runId = 'initial') => {
+    fetch(DEBUG_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Debug-Session-Id': DEBUG_SESSION_ID
+      },
+      body: JSON.stringify({
+        sessionId: DEBUG_SESSION_ID,
+        runId,
+        hypothesisId,
+        location: 'src/index.html',
+        message,
+        data,
+        timestamp: Date.now()
+      })
+    }).catch(() => {});
+  };
+
+  window.addEventListener('error', (event) => {
+    // #region agent log
+    debugLog('H5', 'bootstrap.window.error', {
+      message: event?.message || null,
+      source: event?.filename || null,
+      lineno: event?.lineno || null,
+      colno: event?.colno || null
+    });
+    // #endregion
+  });
+
+  window.addEventListener('unhandledrejection', (event) => {
+    // #region agent log
+    debugLog('H5', 'bootstrap.unhandledrejection', {
+      reason: String(event?.reason || 'unknown')
+    });
+    // #endregion
+  });
+
+  // #region agent log
+  debugLog('H5', 'bootstrap.before_main_import', {
+    readyState: document.readyState,
+    hasGameCanvas: !!document.getElementById('game-canvas')
+  });
+  // #endregion
+
+  import('./js/main.js')
+    .then(() => {
+      // #region agent log
+      debugLog('H5', 'bootstrap.main_import_ok');
+      // #endregion
+    })
+    .catch((err) => {
+      // #region agent log
+      debugLog('H5', 'bootstrap.main_import_failed', {
+        error: String(err || 'unknown')
+      });
+      // #endregion
+    });
+</script>
 </body>
 </html>

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { avoidObstacles } from './world.js';
+import { avoidObstacles, getGroundHeightAt } from './world.js';
 import { voxelMat, voxelBox } from './voxel.js';
+import { getMap } from './mapLoader.js';
 
 let nextAnimalId = 1;
 
@@ -348,7 +349,8 @@ export function spawnAnimal(scene, type, config, corralBounds) {
   const mesh = type === 'Galinha' ? buildChicken() : type === 'Ovelha' ? buildSheep() : buildCow();
   const cx = (corralBounds.minX + corralBounds.maxX) / 2;
   const cz = (corralBounds.minZ + corralBounds.maxZ) / 2;
-  mesh.position.set(cx + (Math.random() - 0.5) * 1.5, 0, cz + (Math.random() - 0.5) * 1.5);
+  const groundY = getGroundHeightAt(cx, cz, 'farm');
+  mesh.position.set(cx + (Math.random() - 0.5) * 1.5, groundY, cz + (Math.random() - 0.5) * 1.5);
   mesh.rotation.y = Math.random() * Math.PI * 2;
   mesh.userData.isAnimal = true;
   scene.add(mesh);
@@ -406,6 +408,7 @@ export function updateAnimalAI(animal, delta, bounds) {
   const resolved = avoidObstacles(nextX, nextZ, 0.3, 'farm');
   mesh.position.x = resolved.x;
   mesh.position.z = resolved.z;
+  mesh.position.y = getGroundHeightAt(resolved.x, resolved.z, 'farm');
   mesh.rotation.y = Math.atan2(dx, dz);
   animal.currentSpeed = speed;
 }
@@ -503,16 +506,20 @@ export function createWolfMesh(scene) {
 }
 
 export function updateWolfPatrol(wolf, delta, time) {
-  const radius = 17 + Math.sin(time * 0.15) * 2;
+  const patrol = getMap()?.wolfPatrol || { x: 0, z: 2, radius: 22 };
+  const radius = (patrol.radius || 22) + Math.sin(time * 0.15) * 2;
   const angle = time * 0.12;
-  wolf.position.set(Math.cos(angle) * radius, 0, Math.sin(angle) * radius - 3);
+  const wx = (patrol.x || 0) + Math.cos(angle) * radius;
+  const wz = (patrol.z || 0) + Math.sin(angle) * radius;
+  const groundY = getGroundHeightAt(wx, wz, 'farm');
+  wolf.position.set(wx, groundY, wz);
   wolf.rotation.y = angle + Math.PI / 2;
 
   const rig = wolf.userData.rig;
   if (!rig) return;
   const stride = Math.sin(time * 7);
   applyQuadrupedStride(rig.legPivots, stride, 0.5);
-  wolf.position.y = Math.abs(Math.sin(time * 7)) * 0.03;
+  wolf.position.y = groundY + Math.abs(Math.sin(time * 7)) * 0.03;
   rig.headPivot.rotation.y = Math.sin(time * 0.6 + rig.bobPhase) * 0.35;
   if (rig.tailPivot) rig.tailPivot.rotation.x = Math.sin(time * 3.5 + rig.bobPhase) * 0.15;
 }

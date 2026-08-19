@@ -6,7 +6,11 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "farming:on": "node scripts/enable-farming.js",
+    "farming:off": "node scripts/disable-farming.js",
+    "story:on": "node scripts/enable-story.js",
+    "story:off": "node scripts/disable-story.js"
   },
   "devDependencies": {
     "electron": "^32.3.3",

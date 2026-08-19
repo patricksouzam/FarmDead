@@ -5,6 +5,25 @@ import {
 } from './textures.js';
 import { buildLowPolyHumanoid } from './characters.js';
 import { voxelBox, voxelStairRoof, buildVoxelTree, buildVoxelCloud, voxelMat } from './voxel.js';
+import { createTerrainForArea } from './terrain/terrainMesh.js';
+import { getGroundHeightAt, FARM_BASE_HEIGHT, setFarmPlotBounds } from './terrain/heightmap.js';
+import { getMap, parseColor } from './mapLoader.js';
+
+// Altura andável do terreno plano da fazenda — MESMA convenção de
+// getGroundHeightAt/placeOnTerrain (FARM_BASE_HEIGHT + 1, topo do bloco +1,
+// não FARM_BASE_HEIGHT puro). Usada onde é mais direto somar um valor fixo
+// em vez de chamar placeOnTerrain (ex.: offsets relativos dentro de
+// buildFenceLoop, ou o collar decorativo).
+const FARM_TERRAIN_TOP_Y = FARM_BASE_HEIGHT + 1;
+
+export { getGroundHeightAt };
+
+/** "Senta" um Object3D sobre o heightmap da área — mesma X/Z, Y ajustado. */
+export function placeOnTerrain(object3D, x, z, areaId = 'farm') {
+  const y = getGroundHeightAt(x, z, areaId);
+  object3D.position.set(x, y, z);
+  return y;
+}
 
 // ---------------------------------------------------------------------------
 // Direção de arte — Voxel / Cube World.
@@ -14,35 +33,164 @@ import { voxelBox, voxelStairRoof, buildVoxelTree, buildVoxelCloud, voxelMat } f
 const areaObstacles = {
   farm: [],
   cave: [],
-  village: []
+  village: [],
+  lake: [],
+  basement: []
 };
 let registrationArea = 'farm';
 let activeObstacles = areaObstacles.farm;
 let activeBounds = null;
 
-// Fazenda + lago (hub). Vila e caverna são instâncias separadas via portal.
-export const PLAY_BOUNDS = { minX: -28, maxX: 28, minZ: -18, maxZ: 14 };
+// Valores iniciais iguais a src/maps/world.json; `applyWorldMap()` sincroniza após o load.
+export const PLAY_BOUNDS = { minX: -28, maxX: 28, minZ: -24, maxZ: 52 };
 export const AREA_BOUNDS = {
   farm: PLAY_BOUNDS,
-  cave: { minX: -23.2, maxX: -16.8, minZ: -2.8, maxZ: 6.2 },
-  village: { minX: -14, maxX: 14, minZ: 18, maxZ: 36 }
+  cave: { minX: -27.2, maxX: -20.8, minZ: 4.8, maxZ: 11.2 },
+  village: PLAY_BOUNDS,
+  lake: { minX: 6, maxX: 30, minZ: -4, maxZ: 20 },
+  basement: { minX: -0.6, maxX: 5.4, minZ: -16.5, maxZ: -10.5 }
 };
 activeBounds = AREA_BOUNDS.farm;
 
-export const HOUSE_POSITION = { x: 0, z: -8 };
-export const BARN_POSITION = { x: 10, z: -8 };
-export const CAVE_POSITION = { x: -20, z: 4 };
-export const LAKE_POSITION = { x: 18, z: 8 };
+export const PLAYER_SPAWN = { x: 0, z: -6 };
+export const HOUSE_POSITION = { x: 0, z: -12 };
+export const BARN_POSITION = { x: 14, z: -12 };
+export const SILO_POSITION = { x: 18, z: -16 };
+export const WINDMILL_POSITION = { x: 20, z: -8 };
+export const CAVE_POSITION = { x: -24, z: 8 };
+export const BASEMENT_POSITION = { x: 2.4, z: -13.5 };
+export const BASEMENT_ENTER_SPAWN = { x: 2.4, z: -11.2 };
+export const BASEMENT_EXIT_SPAWN = { x: 1.6, z: -12.6 };
+export const LAKE_GATE = { x: 24, z: 8 };
+export const LAKE_AREA_CENTER = { x: 18, z: 8 };
+export const LAKE_POSITION = LAKE_AREA_CENTER;
 export const DOCK_POSITION = { x: 14.5, z: 8 };
-export const VILLAGE_PLAZA = { x: 0, z: 26 };
-export const VILLAGE_GATE = { x: 0, z: 11.5 };
+export const VILLAGE_PLAZA = { x: 0, z: 42 };
+export const VILLAGE_GATE = { x: 0, z: 28 };
+export const CAR_POSITION = { x: 5.5, z: -9.5 };
+export const WELL_POSITION = { x: -6.5, z: -7.5 };
+export const ARTESIAN_WELL_POSITION = { x: -10.5, z: -6.0 };
+export const CORRAL_LAYOUT = { x: -12, z: -12, width: 5, depth: 4.5, gateSide: 'east' };
+export const FENCES_LAYOUT = {
+  boundsX: [-16, 16],
+  boundsZ: [-18, 12],
+  gateSide: 'north',
+  gateWidth: 3.4
+};
+export const VILLAGE_LAYOUT = {
+  merchantStand: { x: 8.2, z: 39.5 },
+  supplierStand: { x: -8.2, z: 39.5 },
+  govStand: { x: 0, z: 44.6 },
+  merchantHome: { x: 10.6, z: 46.4 },
+  supplierHome: { x: -10.6, z: 46.4 },
+  govHome: { x: 0, z: 48.6 },
+  bakery: { x: 8.4, z: 36.6 },
+  stall: { x: -8.4, z: 36.8 },
+  alarmBell: { x: 4.4, z: 46.2 },
+  extraHomes: [],
+  benches: [[-3.8, 40.2], [3.8, 40.2]],
+  lamps: [[-4.8, 42.6], [4.8, 42.6], [0, 39.2], [10.2, 43.4], [-10.2, 43.4]],
+  crates: [[1.8, 39.4], [-3.2, 42.8], [8.6, 40.8], [-7.4, 44.2], [5.2, 38.6]],
+  planks: [[-1.4, 37.8, 0.9], [6.2, 45.4, -0.4], [-9.2, 40.6, 1.4]],
+  corpseSpots: [
+    { x: 2.4, z: 41.2, yaw: 1.2 },
+    { x: -2.1, z: 43.4, yaw: -0.6 },
+    { x: 7.4, z: 43.6, yaw: 2.4 },
+    { x: -6.8, z: 38.4, yaw: 0.4 }
+  ]
+};
 
-// Spawns de transição entre instâncias
-export const CAVE_ENTER_SPAWN = { x: -20, z: 3.2 };
-export const CAVE_EXIT_SPAWN = { x: -20, z: 4.6 };
-export const VILLAGE_ENTER_SPAWN = { x: 0, z: 21.5 };
-export const FARM_FROM_CAVE_SPAWN = { x: -18.5, z: 5.2 };
-export const FARM_FROM_VILLAGE_SPAWN = { x: 0, z: 10.2 };
+export const CAVE_ENTER_SPAWN = { x: -24, z: 7.2 };
+export const CAVE_EXIT_SPAWN = { x: -24, z: 8.6 };
+export const VILLAGE_ENTER_SPAWN = { x: 0, z: 35.5 };
+export const FARM_FROM_CAVE_SPAWN = { x: -22.5, z: 9.2 };
+export const FARM_FROM_VILLAGE_SPAWN = { x: 0, z: 26.2 };
+export const LAKE_ENTER_SPAWN = { x: 15.5, z: 6.5 };
+export const FARM_FROM_LAKE_SPAWN = { x: 21.5, z: 5.5 };
+
+function assignXZ(target, src) {
+  if (!target || !src) return;
+  if (src.x != null) target.x = src.x;
+  if (src.z != null) target.z = src.z;
+}
+
+export function applyWorldMap(map = getMap()) {
+  if (!map) return;
+
+  const overworld = map.bounds?.overworld;
+  if (overworld) Object.assign(PLAY_BOUNDS, overworld);
+  if (map.bounds?.lake) Object.assign(AREA_BOUNDS.lake, map.bounds.lake);
+  if (map.bounds?.basement) Object.assign(AREA_BOUNDS.basement, map.bounds.basement);
+  if (map.bounds?.cave) Object.assign(AREA_BOUNDS.cave, map.bounds.cave);
+
+  assignXZ(PLAYER_SPAWN, map.playerSpawn);
+  const L = map.landmarks || {};
+  assignXZ(HOUSE_POSITION, L.house);
+  assignXZ(BARN_POSITION, L.barn);
+  assignXZ(SILO_POSITION, L.silo);
+  assignXZ(WINDMILL_POSITION, L.windmill);
+  assignXZ(CAVE_POSITION, L.cave);
+  assignXZ(BASEMENT_POSITION, L.basement);
+  assignXZ(LAKE_GATE, L.lakeGate);
+  assignXZ(LAKE_AREA_CENTER, L.lakeAreaCenter);
+  assignXZ(DOCK_POSITION, L.dock);
+  assignXZ(VILLAGE_PLAZA, L.plaza);
+  assignXZ(VILLAGE_GATE, L.villageGate);
+  assignXZ(CAR_POSITION, L.car);
+  assignXZ(WELL_POSITION, L.well);
+  assignXZ(ARTESIAN_WELL_POSITION, L.artesianWell);
+
+  const S = map.spawns || {};
+  assignXZ(CAVE_ENTER_SPAWN, S.caveEnter);
+  assignXZ(CAVE_EXIT_SPAWN, S.caveExit);
+  assignXZ(VILLAGE_ENTER_SPAWN, S.villageEnter);
+  assignXZ(FARM_FROM_CAVE_SPAWN, S.farmFromCave);
+  assignXZ(FARM_FROM_VILLAGE_SPAWN, S.farmFromVillage);
+  assignXZ(LAKE_ENTER_SPAWN, S.lakeEnter);
+  assignXZ(FARM_FROM_LAKE_SPAWN, S.farmFromLake);
+  assignXZ(BASEMENT_ENTER_SPAWN, S.basementEnter);
+  assignXZ(BASEMENT_EXIT_SPAWN, S.basementExit);
+
+  if (map.corral) Object.assign(CORRAL_LAYOUT, map.corral);
+  if (map.fences) {
+    FENCES_LAYOUT.boundsX = map.fences.boundsX || FENCES_LAYOUT.boundsX;
+    FENCES_LAYOUT.boundsZ = map.fences.boundsZ || FENCES_LAYOUT.boundsZ;
+    if (map.fences.gateSide) FENCES_LAYOUT.gateSide = map.fences.gateSide;
+    if (map.fences.gateWidth != null) FENCES_LAYOUT.gateWidth = map.fences.gateWidth;
+  }
+
+  const V = map.village || {};
+  assignXZ(VILLAGE_LAYOUT.merchantStand, V.merchantStand);
+  assignXZ(VILLAGE_LAYOUT.supplierStand, V.supplierStand);
+  assignXZ(VILLAGE_LAYOUT.govStand, V.govStand);
+  assignXZ(VILLAGE_LAYOUT.merchantHome, V.merchantHome);
+  assignXZ(VILLAGE_LAYOUT.supplierHome, V.supplierHome);
+  assignXZ(VILLAGE_LAYOUT.govHome, V.govHome);
+  assignXZ(VILLAGE_LAYOUT.bakery, V.bakery);
+  assignXZ(VILLAGE_LAYOUT.stall, V.stall);
+  assignXZ(VILLAGE_LAYOUT.alarmBell, V.alarmBell);
+  VILLAGE_LAYOUT.benches = V.benches || VILLAGE_LAYOUT.benches;
+  VILLAGE_LAYOUT.lamps = V.lamps || VILLAGE_LAYOUT.lamps;
+  VILLAGE_LAYOUT.crates = V.crates || VILLAGE_LAYOUT.crates;
+  VILLAGE_LAYOUT.planks = V.planks || VILLAGE_LAYOUT.planks;
+  VILLAGE_LAYOUT.corpseSpots = V.corpseSpots || VILLAGE_LAYOUT.corpseSpots;
+  VILLAGE_LAYOUT.extraHomes = (V.extraHomes || []).map(home => ({
+    x: home.x,
+    z: home.z,
+    wall: parseColor(home.wall, 0xe4c9a4),
+    roof: parseColor(home.roof, 0x6a3a28),
+    yaw: home.yaw || 0
+  }));
+
+  if (map.decorSlots) {
+    Object.keys(map.decorSlots).forEach(key => {
+      DECOR_SLOTS[key] = map.decorSlots[key];
+    });
+  }
+
+  if (map.farmPlotBounds) setFarmPlotBounds(map.farmPlotBounds);
+  activeBounds = AREA_BOUNDS.farm;
+}
 
 export function beginObstacleRegistration(areaId = 'farm') {
   registrationArea = areaObstacles[areaId] ? areaId : 'farm';
@@ -57,14 +205,26 @@ export function getActivePlayBounds() {
   return activeBounds || AREA_BOUNDS.farm;
 }
 
-export function registerObstaclePublic(x, z, radius, areaId) {
-  registerObstacle(x, z, radius, areaId);
-}
-
 function registerObstacle(x, z, radius, areaId) {
   const key = areaId || registrationArea || 'farm';
   if (!areaObstacles[key]) areaObstacles[key] = [];
-  areaObstacles[key].push({ x, z, radius });
+  areaObstacles[key].push({ kind: 'circle', x, z, radius });
+}
+
+export function registerBoxObstacle(x, z, hx, hz, areaId) {
+  const key = areaId || registrationArea || 'farm';
+  if (!areaObstacles[key]) areaObstacles[key] = [];
+  areaObstacles[key].push({ kind: 'box', x, z, hx: Math.max(0.08, hx), hz: Math.max(0.08, hz) });
+}
+
+export function registerOrientedBox(x, z, width, depth, yaw = 0, areaId) {
+  const c = Math.abs(Math.cos(yaw));
+  const s = Math.abs(Math.sin(yaw));
+  registerBoxObstacle(x, z, (width / 2) * c + (depth / 2) * s, (width / 2) * s + (depth / 2) * c, areaId);
+}
+
+export function registerObstaclePublic(x, z, radius, areaId) {
+  registerObstacle(x, z, radius, areaId);
 }
 
 export function getObstacles(areaId) {
@@ -72,48 +232,118 @@ export function getObstacles(areaId) {
   return activeObstacles;
 }
 
+function closestOnObstacle(o, x, z) {
+  if (o.kind === 'box') {
+    return {
+      x: Math.max(o.x - o.hx, Math.min(x, o.x + o.hx)),
+      z: Math.max(o.z - o.hz, Math.min(z, o.z + o.hz))
+    };
+  }
+  return { x: o.x, z: o.z };
+}
+
 function isBlocked(x, z, margin, list = activeObstacles) {
   for (const o of list) {
-    const minDist = o.radius + margin;
-    if (Math.hypot(x - o.x, z - o.z) < minDist) return true;
+    const p = closestOnObstacle(o, x, z);
+    const dx = x - p.x;
+    const dz = z - p.z;
+    if (o.kind === 'box' && dx === 0 && dz === 0) return true;
+    const minDist = o.kind === 'box' ? margin : (o.radius + margin);
+    if (Math.hypot(dx, dz) < minDist) return true;
   }
   return false;
 }
 
-// Empurra (x, z) para fora de qualquer obstáculo cujo raio + margem invada,
-// deslocando ao longo da linha centro-obstáculo → ponto. Usada pela IA de
-// animais para não atravessar construções/árvores/rochas ao vaguear.
+function pushOutOfObstacle(o, x, z, margin) {
+  if (o.kind === 'box') {
+    const insideX = Math.abs(x - o.x) <= o.hx;
+    const insideZ = Math.abs(z - o.z) <= o.hz;
+    if (insideX && insideZ) {
+      const ox = o.hx - Math.abs(x - o.x);
+      const oz = o.hz - Math.abs(z - o.z);
+      if (ox < oz) x = o.x + Math.sign(x - o.x || 1) * (o.hx + margin);
+      else z = o.z + Math.sign(z - o.z || 1) * (o.hz + margin);
+      return { x, z };
+    }
+    const p = closestOnObstacle(o, x, z);
+    const dx = x - p.x;
+    const dz = z - p.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < margin) {
+      if (dist > 1e-5) {
+        const push = (margin + 0.002) / dist;
+        return { x: p.x + dx * push, z: p.z + dz * push };
+      }
+      return { x: x + margin, z };
+    }
+    return { x, z };
+  }
+
+  const dx = x - o.x;
+  const dz = z - o.z;
+  const minDist = o.radius + margin;
+  const dist = Math.hypot(dx, dz);
+  if (dist < minDist) {
+    if (dist > 1e-4) {
+      const push = minDist / dist;
+      return { x: o.x + dx * push, z: o.z + dz * push };
+    }
+    return { x: o.x + minDist, z };
+  }
+  return { x, z };
+}
+
 export function avoidObstacles(x, z, margin = 0.3, areaId = null) {
   const list = areaId ? (areaObstacles[areaId] || []) : activeObstacles;
-  for (let pass = 0; pass < 3; pass++) {
+  for (let pass = 0; pass < 4; pass++) {
     for (const o of list) {
-      const dx = x - o.x;
-      const dz = z - o.z;
-      const minDist = o.radius + margin;
-      const dist = Math.sqrt(dx * dx + dz * dz);
-      if (dist < minDist) {
-        if (dist > 0.0001) {
-          const push = minDist / dist;
-          x = o.x + dx * push;
-          z = o.z + dz * push;
-        } else {
-          x = o.x + minDist;
-        }
-      }
+      const next = pushOutOfObstacle(o, x, z, margin);
+      x = next.x;
+      z = next.z;
     }
   }
   return { x, z };
 }
 
-// Desliza nos eixos (X depois Z) para não grudar entre círculos grandes.
 export function resolveMovement(fromX, fromZ, toX, toZ, margin = 0.3, areaId = null) {
   const list = areaId ? (areaObstacles[areaId] || []) : activeObstacles;
-  let x = toX;
-  let z = fromZ;
-  if (isBlocked(x, z, margin, list)) x = fromX;
-  z = toZ;
-  if (isBlocked(x, z, margin, list)) z = fromZ;
-  return avoidObstacles(x, z, margin, areaId);
+  const start = avoidObstacles(fromX, fromZ, margin, areaId);
+  const fx = start.x;
+  const fz = start.z;
+
+  if (!isBlocked(toX, toZ, margin, list)) return { x: toX, z: toZ };
+  if (!isBlocked(toX, fz, margin, list)) return { x: toX, z: fz };
+  if (!isBlocked(fx, toZ, margin, list)) return { x: fx, z: toZ };
+
+  const dx = toX - fx;
+  const dz = toZ - fz;
+  const dist = Math.hypot(dx, dz);
+  if (dist > 1e-5) {
+    const base = Math.atan2(dx, dz);
+    for (const a of [0.35, -0.35, 0.7, -0.7, 1.15, -1.15]) {
+      const nx = fx + Math.sin(base + a) * dist;
+      const nz = fz + Math.cos(base + a) * dist;
+      if (!isBlocked(nx, nz, margin, list)) return { x: nx, z: nz };
+    }
+  }
+
+  return { x: fx, z: fz };
+}
+
+export function resolveEntityBump(x, z, radius, others) {
+  for (const o of others) {
+    if (!o) continue;
+    const dx = x - o.x;
+    const dz = z - o.z;
+    const min = radius + (o.radius || 0.35);
+    const dist = Math.hypot(dx, dz);
+    if (dist < min && dist > 1e-4) {
+      const push = (min - dist) / dist;
+      x += dx * push * 0.85;
+      z += dz * push * 0.85;
+    }
+  }
+  return { x, z };
 }
 
 const textures = {
@@ -211,7 +441,7 @@ export function createScene() {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x5eb8ef);
   // Névoa sutil — mantém horizonte soft sem lavar o contraste voxel.
-  scene.fog = new THREE.FogExp2(0x9fd8f0, 0.0032);
+  scene.fog = new THREE.FogExp2(0x12182a, 0.016);
   return scene;
 }
 
@@ -378,10 +608,10 @@ export function updateWind(wind, delta) {
   wind.time += delta;
   wind.gust = Math.max(0, wind.gust - delta * 0.55);
   // Rajadas ocasionais
-  if (Math.random() < 0.004 * delta * 60) {
-    wind.gust = 0.9 + Math.random() * 1.4;
+  if (Math.random() < 0.009 * delta * 60) {
+    wind.gust = 1.15 + Math.random() * 1.7;
   }
-  const breathe = 0.5 + Math.sin(wind.time * 0.22) * 0.22 + Math.sin(wind.time * 0.07) * 0.12;
+  const breathe = 0.62 + Math.sin(wind.time * 0.22) * 0.28 + Math.sin(wind.time * 0.07) * 0.16;
   wind.strength = breathe + wind.gust;
   wind.angle += Math.sin(wind.time * 0.05) * 0.015 * delta;
   return wind;
@@ -442,10 +672,10 @@ export function applyWindEffects({ wind, treesGroup, grassGroup, windmill, cloud
       leaf.rotation.x += leaf.userData.spin * delta;
       leaf.rotation.y += leaf.userData.spin * 0.7 * delta;
       if (leaf.position.y < 0.3) leaf.position.y = 2 + Math.random() * 6;
-      if (leaf.position.x > 30) leaf.position.x = -30;
-      if (leaf.position.x < -30) leaf.position.x = 30;
-      if (leaf.position.z > 36) leaf.position.z = -18;
-      if (leaf.position.z < -18) leaf.position.z = 36;
+      if (leaf.position.x > PLAY_BOUNDS.maxX + 4) leaf.position.x = PLAY_BOUNDS.minX - 4;
+      if (leaf.position.x < PLAY_BOUNDS.minX - 4) leaf.position.x = PLAY_BOUNDS.maxX + 4;
+      if (leaf.position.z > PLAY_BOUNDS.maxZ + 4) leaf.position.z = PLAY_BOUNDS.minZ - 4;
+      if (leaf.position.z < PLAY_BOUNDS.minZ - 4) leaf.position.z = PLAY_BOUNDS.maxZ + 4;
     });
   }
 }
@@ -454,13 +684,13 @@ export function createLights(scene) {
   // Ambient/hemisférico um pouco mais fortes que antes para preencher as
   // sombras com luz colorida do céu/chão em vez de ficarem quase pretas,
   // mantendo o sol como a principal fonte de volume e sombra projetada.
-  const ambientLight = new THREE.AmbientLight(0xdfe8ff, 0.42);
+  const ambientLight = new THREE.AmbientLight(0xdfe8ff, 0.38);
   scene.add(ambientLight);
 
-  const hemiLight = new THREE.HemisphereLight(0xcfe8ff, 0x6a8a46, 0.55);
+  const hemiLight = new THREE.HemisphereLight(0xcfe8ff, 0x6a8a46, 0.5);
   scene.add(hemiLight);
 
-  const sunLight = new THREE.DirectionalLight(0xfff0c8, 3.6);
+  const sunLight = new THREE.DirectionalLight(0xfff0c8, 3.2);
   sunLight.position.set(30, 40, 20);
   sunLight.castShadow = true;
   sunLight.shadow.mapSize.set(2048, 2048);
@@ -477,14 +707,14 @@ export function createLights(scene) {
 
   // Luz de preenchimento fria e fraca, oposta ao sol: suaviza o lado escuro
   // dos volumes sem apagar as sombras projetadas.
-  const fillLight = new THREE.DirectionalLight(0xaecdff, 0.35);
+  const fillLight = new THREE.DirectionalLight(0xaecdff, 0.28);
   fillLight.position.set(-25, 18, -18);
   scene.add(fillLight);
 
-  const moonLight = new THREE.DirectionalLight(0x9fbaff, 0);
+  const moonLight = new THREE.DirectionalLight(0xb8c8ff, 0);
   moonLight.position.set(-30, 40, -20);
   moonLight.castShadow = true;
-  moonLight.shadow.mapSize.set(1024, 1024);
+  moonLight.shadow.mapSize.set(2048, 2048);
   moonLight.shadow.camera.near = 1;
   moonLight.shadow.camera.far = 140;
   moonLight.shadow.camera.left = -d;
@@ -498,48 +728,34 @@ export function createLights(scene) {
   return { ambientLight, hemiLight, sunLight, moonLight, fillLight };
 }
 
-export function createGround(scene) {
-  const size = 90;
-  const segs = 64;
-  const geo = new THREE.PlaneGeometry(size, size, segs, segs);
-  const pos = geo.attributes.position;
-  const colors = [];
-  const color = new THREE.Color();
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const y = pos.getY(i);
-    const h =
-      (Math.sin(x * 0.18) * Math.cos(y * 0.16)) * 0.28 +
-      Math.sin(x * 0.45 + y * 0.2) * 0.08 +
-      Math.cos(y * 0.55) * 0.05;
-    pos.setZ(i, h);
-    // Vertex tint: mais escuro nas depressões, mais claro nas elevações
-    const t = THREE.MathUtils.clamp(0.55 + h * 1.4, 0.4, 0.85);
-    color.setRGB(t * 0.55, t * 0.78, t * 0.4);
-    colors.push(color.r, color.g, color.b);
-  }
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  geo.computeVertexNormals();
+export function createGround(scene, worldSeed = 12345) {
+  const size = 90; // colar/coleção decorativa (montanhas etc.) mantém o raio visual original
 
-  const groundMat = new THREE.MeshStandardMaterial({
-    map: textures.grass,
-    color: new THREE.Color(0xffffff),
-    roughness: 0.95,
-    metalness: 0.0,
-    vertexColors: true,
-    flatShading: true
-  });
-  const ground = new THREE.Mesh(geo, groundMat);
-  ground.rotation.x = -Math.PI / 2;
-  ground.receiveShadow = true;
-  scene.add(ground);
+  // Bounds do terreno EM BLOCOS: cobre só a área navegável real da fazenda
+  // (PLAY_BOUNDS) com uma margem pequena — gerar blocos até size/2=45 em
+  // cada eixo custava ~17k instâncias sombreadas (91x91 colunas), pesado
+  // demais para o primeiro frame. A "moldura" visual distante continua
+  // coberta pelo collar/montanhas (meshes únicos, baratos), não pelo motor
+  // de blocos. Sem lakePosition aqui — o lago agora é uma área própria (ver
+  // fishing.js createLake + AREA_BOUNDS.lake), gerada separadamente.
+  const terrainMargin = 6;
+  const terrainBounds = {
+    minX: PLAY_BOUNDS.minX - terrainMargin, maxX: PLAY_BOUNDS.maxX + terrainMargin,
+    minZ: PLAY_BOUNDS.minZ - terrainMargin, maxZ: PLAY_BOUNDS.maxZ + terrainMargin
+  };
+  const { group: terrainGroup } = createTerrainForArea('farm', terrainBounds, worldSeed, null);
+  terrainGroup.name = 'voxelTerrain';
+  scene.add(terrainGroup);
 
   const collarMat = new THREE.MeshStandardMaterial({
     color: palette.grassGround, roughness: 0.95, flatShading: true
   });
-  const collar = new THREE.Mesh(new THREE.RingGeometry(size / 2 - 2, 72, 40), collarMat);
+  // Raio interno do anel = borda do terreno em blocos (evita um vão sem
+  // chão entre o fim do voxel e o início do collar decorativo).
+  const collarInnerRadius = Math.max(Math.abs(terrainBounds.minX), Math.abs(terrainBounds.maxX), Math.abs(terrainBounds.minZ), Math.abs(terrainBounds.maxZ)) + 1;
+  const collar = new THREE.Mesh(new THREE.RingGeometry(collarInnerRadius, collarInnerRadius + 24, 40), collarMat);
   collar.rotation.x = -Math.PI / 2;
-  collar.position.y = -0.05;
+  collar.position.y = FARM_TERRAIN_TOP_Y - 0.05;
   collar.receiveShadow = true;
   scene.add(collar);
 
@@ -551,17 +767,23 @@ export function createGround(scene) {
   const overworldDecor = new THREE.Group();
   overworldDecor.name = 'overworldDecor';
   scene.add(overworldDecor);
-  overworldDecor.attach(ground);
+  overworldDecor.attach(terrainGroup);
   overworldDecor.attach(collar);
   if (mountainGroup?.parent) overworldDecor.attach(mountainGroup);
   if (rocksGroup?.parent) overworldDecor.attach(rocksGroup);
   if (grassGroup?.parent) overworldDecor.attach(grassGroup);
 
+  // "ground" é agora um container leve (não a malha em si, que virou um
+  // THREE.Group de InstancedMesh) — mantém a mesma API de userData que o
+  // resto do código (main.js) já consome.
+  const ground = new THREE.Group();
+  ground.name = 'groundContainer';
   ground.userData.baseCollarColor = palette.grassGround;
   ground.userData.collarMat = collarMat;
   ground.userData.mountainGroup = mountainGroup;
   ground.userData.grassGroup = grassGroup;
   ground.userData.overworldDecor = overworldDecor;
+  ground.userData.terrainGroup = terrainGroup;
   return ground;
 }
 
@@ -588,16 +810,15 @@ function createGrassTufts(scene) {
     const dist = 10 + (i % 7) * 3.5;
     let x = Math.cos(angle) * dist;
     let z = Math.sin(angle) * dist;
-    if (Math.abs(x) < 10 && z > -4 && z < 12) x += Math.sign(x || 1) * 12;
-    // Evita caverna/lago
-    if (Math.hypot(x + 20, z - 4) < 6) continue;
-    if (Math.hypot(x - 18, z - 8) < 6) continue;
-    tuft.position.set(x, 0, z);
+    if (Math.abs(x) < 10 && z > -8 && z < 14) x += Math.sign(x || 1) * 12;
+    if (Math.hypot(x - CAVE_POSITION.x, z - CAVE_POSITION.z) < 6) continue;
+    if (Math.hypot(x - LAKE_GATE.x, z - LAKE_GATE.z) < 6) continue;
+    tuft.position.set(x, FARM_TERRAIN_TOP_Y, z);
     group.add(tuft);
   }
 
   const bushMat = mat(palette.foliageB, { roughness: 0.85 });
-  const bushSpots = [[-12, 10], [12, 10], [-14, -12], [15, -11], [16, 30], [-16, 30]];
+  const bushSpots = getMap()?.bushes || [[-14, 14], [14, 14], [-16, -16], [18, -14], [16, 34], [-16, 34]];
   bushSpots.forEach(([x, z]) => {
     const bush = new THREE.Group();
     for (let j = 0; j < 3; j++) {
@@ -607,7 +828,7 @@ function createGrassTufts(scene) {
       lobe.position.set((j - 1) * 0.25, 0.3, (j % 2) * 0.12);
       bush.add(lobe);
     }
-    bush.position.set(x, 0, z);
+    bush.position.set(x, FARM_TERRAIN_TOP_Y, z);
     group.add(bush);
   });
 
@@ -623,7 +844,10 @@ function createMountains(scene) {
   const group = new THREE.Group();
   const colors = [palette.mountainRock, palette.mountainRockLight];
   const snowMat = mat(0xeef6fb, { roughness: 0.75 });
-  const ringRadius = 48;
+  const ringRadius = Math.max(
+    Math.abs(PLAY_BOUNDS.minX), Math.abs(PLAY_BOUNDS.maxX),
+    Math.abs(PLAY_BOUNDS.minZ), Math.abs(PLAY_BOUNDS.maxZ)
+  ) + 14;
   const count = 28;
 
   for (let i = 0; i < count; i++) {
@@ -641,7 +865,7 @@ function createMountains(scene) {
     snow.position.y = 1.1 + layers * 2.0;
     snow.userData.isSnowCap = true;
     peak.add(snow);
-    peak.position.set(Math.cos(angle) * dist, 0, Math.sin(angle) * dist);
+    peak.position.set(Math.cos(angle) * dist, FARM_TERRAIN_TOP_Y, Math.sin(angle) * dist);
     peak.rotation.y = angle;
     group.add(peak);
   }
@@ -667,9 +891,9 @@ function createRocks(scene) {
   const rockMat = mat(palette.rockGrey, { roughness: 0.9 });
   const rockMatLight = mat(palette.rockGreyLight, { roughness: 0.9 });
 
-  const positions = [
-    [-17.5, -6], [17.5, -3], [-15, 8], [16, 8],
-    [-19, 2], [8, -13], [-6, -13.5], [20, -14], [-20, -14]
+  const positions = getMap()?.rocks || [
+    [-20, -8], [22, -4], [-18, 12], [18, 12],
+    [-22, 4], [10, -18], [-8, -18], [24, -16], [-24, -14]
   ];
 
   positions.forEach(([x, z]) => {
@@ -677,7 +901,7 @@ function createRocks(scene) {
     const scale = 0.8 + Math.random() * 0.6;
     const px = x + (Math.random() - 0.5) * 2;
     const pz = z + (Math.random() - 0.5) * 2;
-    cluster.position.set(px, 0, pz);
+    cluster.position.set(px, FARM_TERRAIN_TOP_Y, pz);
     cluster.rotation.y = Math.random() * Math.PI * 2;
     cluster.scale.setScalar(scale);
     group.add(cluster);
@@ -692,7 +916,7 @@ function createRocks(scene) {
 // (2+ pontos) que liga pontos de interesse com trechos retos e curvas nos vértices
 // intermediários, formando uma rede de caminhos coerente (hub na casa, ramais mais
 // estreitos para dependências secundárias).
-export function createPaths(scene, routes) {
+export function createPaths(scene, routes, baseY = FARM_TERRAIN_TOP_Y) {
   const group = new THREE.Group();
 
   routes.forEach(route => {
@@ -718,7 +942,7 @@ export function createPaths(scene, routes) {
       const mesh = new THREE.Mesh(geo, segMat);
       mesh.rotation.x = -Math.PI / 2;
       mesh.rotation.z = -angle;
-      mesh.position.set((ax + bx) / 2, 0.03, (az + bz) / 2);
+      mesh.position.set((ax + bx) / 2, getGroundHeightAt((ax + bx) / 2, (az + bz) / 2, 'farm') + 0.03, (az + bz) / 2);
       mesh.receiveShadow = true;
       group.add(mesh);
     }
@@ -726,7 +950,7 @@ export function createPaths(scene, routes) {
     pts.forEach(([px, pz]) => {
       const cap = new THREE.Mesh(capGeo, capMat);
       cap.rotation.x = -Math.PI / 2;
-      cap.position.set(px, 0.03, pz);
+      cap.position.set(px, getGroundHeightAt(px, pz, 'farm') + 0.03, pz);
       cap.receiveShadow = true;
       group.add(cap);
     });
@@ -745,59 +969,58 @@ export function createPaths(scene, routes) {
 // consecutivos, travessas e fios ESTICADOS com o comprimento exato do vão — assim
 // toda peça horizontal encosta fisicamente no poste seguinte. Reaproveitada por
 // createFences e createCorral. `closed: true` fecha o último ponto de volta ao primeiro.
-function buildFenceLoop(group, points, { closed = true, postMat, capMat, wireMat } = {}) {
-  const postGeo = new THREE.CylinderGeometry(0.09, 0.12, 0.9, 6);
-  const postCapGeo = new THREE.ConeGeometry(0.11, 0.14, 6);
+function buildFenceLoop(group, points, { closed = true, postMat, capMat, plankMat, wireMat, areaId = 'farm' } = {}) {
+  const postW = 0.2;
+  const postH = 1.42;
+  const plankH = 0.16;
+  const plankT = 0.07;
 
   function addPost(x, z) {
-    const post = new THREE.Mesh(postGeo, postMat);
-    post.position.set(x, 0.45, z);
-    post.rotation.y = Math.random() * Math.PI;
-    post.castShadow = true;
+    const post = voxelBox(postW, postH, postW, postMat);
+    post.position.set(x, FARM_TERRAIN_TOP_Y + postH / 2, z);
     group.add(post);
-
-    const cap = new THREE.Mesh(postCapGeo, capMat);
-    cap.position.set(x, 0.97, z);
+    const cap = voxelBox(0.26, 0.08, 0.26, capMat);
+    cap.position.set(x, FARM_TERRAIN_TOP_Y + postH + 0.03, z);
     group.add(cap);
   }
 
-  function addRail(x1, z1, x2, z2, y) {
-    const dx = x2 - x1, dz = z2 - z1;
-    const length = Math.sqrt(dx * dx + dz * dz);
-    const angle = Math.atan2(dz, dx);
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(length, 0.1, 0.06), postMat);
-    rail.position.set((x1 + x2) / 2, y, (z1 + z2) / 2);
-    rail.rotation.y = -angle;
-    rail.castShadow = true;
-    group.add(rail);
-  }
+  function addSpan(x1, z1, x2, z2) {
+    const dx = x2 - x1;
+    const dz = z2 - z1;
+    const length = Math.hypot(dx, dz);
+    if (length < 0.2) return;
+    const angle = Math.atan2(dx, dz);
+    const mx = (x1 + x2) / 2;
+    const mz = (z1 + z2) / 2;
+    const plankLen = Math.max(0.2, length - 0.18);
 
-  function addWires(x1, z1, x2, z2) {
-    const dx = x2 - x1, dz = z2 - z1;
-    const length = Math.sqrt(dx * dx + dz * dz);
-    const angle = Math.atan2(dz, dx);
-    const wireGeo = new THREE.CylinderGeometry(0.011, 0.011, length, 4);
-    [0.76, 0.5, 0.2].forEach(h => {
-      const wire = new THREE.Mesh(wireGeo, wireMat);
-      wire.position.set((x1 + x2) / 2, h, (z1 + z2) / 2);
-      wire.rotation.order = 'YXZ';
-      wire.rotation.y = -angle;
-      wire.rotation.x = Math.PI / 2;
-      group.add(wire);
+    [0.38, 0.78, 1.16].forEach(h => {
+      const plank = voxelBox(plankT, plankH, plankLen, plankMat);
+      plank.position.set(mx, FARM_TERRAIN_TOP_Y + h, mz);
+      plank.rotation.y = angle;
+      group.add(plank);
     });
-  }
 
-  const n = points.length;
-  const segCount = closed ? n : n - 1;
+    const wire = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.012, 0.012, plankLen, 5),
+      wireMat
+    );
+    wire.position.set(mx, FARM_TERRAIN_TOP_Y + 1.34, mz);
+    wire.rotation.order = 'YXZ';
+    wire.rotation.y = angle;
+    wire.rotation.x = Math.PI / 2;
+    group.add(wire);
+
+    registerOrientedBox(mx, mz, plankT + 0.18, length, angle, areaId);
+  }
 
   points.forEach(p => addPost(p[0], p[1]));
-
+  const n = points.length;
+  const segCount = closed ? n : n - 1;
   for (let i = 0; i < segCount; i++) {
     const a = points[i];
     const b = points[(i + 1) % n];
-    addRail(a[0], a[1], b[0], b[1], 0.62);
-    addRail(a[0], a[1], b[0], b[1], 0.32);
-    addWires(a[0], a[1], b[0], b[1]);
+    addSpan(a[0], a[1], b[0], b[1]);
   }
 }
 
@@ -805,15 +1028,17 @@ function buildFenceLoop(group, points, { closed = true, postMat, capMat, wireMat
 // lado indicado — 'north' = maxZ (rumo à estrada/vila), 'south' = minZ, etc.
 export function createFences(scene, boundsX, boundsZ, opts = {}) {
   const group = new THREE.Group();
-  const postMat = texMat(textures.wood, { color: palette.woodMid, roughness: 0.85 });
-  const capMat = texMat(textures.wood, { color: palette.woodDark, roughness: 0.85 });
-  const wireMat = mat(0x8d8d82, { roughness: 0.55, metalness: 0.55, flatShading: false });
+  group.name = 'farmFence';
+  const postMat = voxelMat(palette.woodDark, { roughness: 0.78 });
+  const capMat = voxelMat(0x3a2a1c, { roughness: 0.7 });
+  const plankMat = voxelMat(palette.woodMid, { roughness: 0.82 });
+  const wireMat = mat(0xa8a090, { roughness: 0.4, metalness: 0.55, flatShading: false });
 
   const [minX, maxX] = boundsX;
   const [minZ, maxZ] = boundsZ;
-  const step = 1.0;
+  const step = 1.35;
   const gateSide = opts.gateSide || null;
-  const gateWidth = opts.gateWidth ?? 2.4;
+  const gateWidth = opts.gateWidth ?? 3.4;
 
   const perimeter = [];
   for (let x = minX; x < maxX; x += step) perimeter.push([x, minZ]);
@@ -821,13 +1046,14 @@ export function createFences(scene, boundsX, boundsZ, opts = {}) {
   for (let x = maxX; x > minX; x -= step) perimeter.push([x, maxZ]);
   for (let z = maxZ; z > minZ; z -= step) perimeter.push([minX, z]);
 
+  const fenceOpts = { closed: !gateSide, postMat, capMat, plankMat, wireMat, areaId: 'farm' };
+
   if (!gateSide) {
-    buildFenceLoop(group, perimeter, { closed: true, postMat, capMat, wireMat });
+    buildFenceLoop(group, perimeter, fenceOpts);
     scene.add(group);
     return { group, gate: null, bounds: { minX, maxX, minZ, maxZ } };
   }
 
-  // Convenção do mapa: +Z = norte (vila), -Z = sul (casa).
   const gateX = gateSide === 'east' ? maxX : gateSide === 'west' ? minX : (minX + maxX) / 2;
   const gateZ = gateSide === 'north' ? maxZ : gateSide === 'south' ? minZ : (minZ + maxZ) / 2;
 
@@ -848,20 +1074,36 @@ export function createFences(scene, boundsX, boundsZ, opts = {}) {
   const rotated = [...perimeter.slice(gateVertexIdx), ...perimeter.slice(0, gateVertexIdx)];
   const openPerimeter = rotated.filter(p => distAlongGateSide(p) >= gateWidth / 2 - 1e-6);
 
-  buildFenceLoop(group, openPerimeter, { closed: false, postMat, capMat, wireMat });
+  buildFenceLoop(group, openPerimeter, { ...fenceOpts, closed: false });
 
-  // Postes do portão nas extremidades do vão
   const half = gateWidth / 2;
   if (gateSide === 'north' || gateSide === 'south') {
     [[gateX - half, gateZ], [gateX + half, gateZ]].forEach(([x, z]) => {
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 1.15, 6), postMat);
-      post.position.set(x, 0.55, z);
-      post.castShadow = true;
+      const post = voxelBox(0.3, 1.9, 0.3, postMat);
+      post.position.set(x, FARM_TERRAIN_TOP_Y + 0.95, z);
       group.add(post);
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.1, 0.22), capMat);
-      cap.position.set(x, 1.15, z);
-      group.add(cap);
+      const capital = voxelBox(0.42, 0.14, 0.42, capMat);
+      capital.position.set(x, FARM_TERRAIN_TOP_Y + 1.92, z);
+      group.add(capital);
+      const lanternGlassMat = voxelMat(0x3a2f10, {
+        emissive: 0xffb347, emissiveIntensity: 1.1, roughness: 0.4, transparent: true, opacity: 0.9
+      });
+      const lantern = voxelBox(0.14, 0.18, 0.14, lanternGlassMat);
+      lantern.position.set(x, FARM_TERRAIN_TOP_Y + 1.72, z);
+      group.add(lantern);
+      const lanternLight = new THREE.PointLight(0xffc878, 0.9, 7, 1.8);
+      lanternLight.position.copy(lantern.position);
+      group.add(lanternLight);
     });
+    const beam = voxelBox(gateWidth + 0.2, 0.16, 0.2, plankMat);
+    beam.position.set(gateX, FARM_TERRAIN_TOP_Y + 1.98, gateZ);
+    group.add(beam);
+    const signFrame = voxelBox(1.5, 0.6, 0.1, plankMat);
+    signFrame.position.set(gateX, FARM_TERRAIN_TOP_Y + 2.25, gateZ + 0.13);
+    group.add(signFrame);
+    const sign = voxelBox(1.3, 0.44, 0.06, voxelMat(0xc9b48a, { roughness: 0.7 }));
+    sign.position.set(gateX, FARM_TERRAIN_TOP_Y + 2.25, gateZ + 0.17);
+    group.add(sign);
   }
 
   scene.add(group);
@@ -873,8 +1115,9 @@ export function createFences(scene, boundsX, boundsZ, opts = {}) {
 // Retorna { group, gate: {x, z, width}, bounds } para o main.js posicionar animais/porteira.
 export function createCorral(scene, centerX, centerZ, width, depth, gateSide = 'south') {
   const group = new THREE.Group();
-  const postMat = texMat(textures.wood, { color: palette.woodLight, roughness: 0.85 });
-  const capMat = texMat(textures.wood, { color: palette.woodDark, roughness: 0.85 });
+  const postMat = voxelMat(palette.woodLight, { roughness: 0.82 });
+  const capMat = voxelMat(palette.woodDark, { roughness: 0.75 });
+  const plankMat = voxelMat(0xb08958, { roughness: 0.8 });
   const wireMat = mat(0x8d8d82, { roughness: 0.55, metalness: 0.55, flatShading: false });
 
   const minX = centerX - width / 2, maxX = centerX + width / 2;
@@ -908,7 +1151,9 @@ export function createCorral(scene, centerX, centerZ, width, depth, gateSide = '
   const rotated = [...perimeter.slice(gateVertexIdx), ...perimeter.slice(0, gateVertexIdx)];
   const openPerimeter = rotated.filter(p => distAlongGateSide(p) >= gateWidth / 2 - 1e-6);
 
-  buildFenceLoop(group, openPerimeter, { closed: false, postMat, capMat, wireMat });
+  buildFenceLoop(group, openPerimeter, {
+    closed: false, postMat, capMat, plankMat, wireMat, areaId: 'farm'
+  });
 
   scene.add(group);
   return { group, gate: { x: gateX, z: gateZ, width: gateWidth, side: gateSide }, bounds: { minX, maxX, minZ, maxZ } };
@@ -1037,11 +1282,9 @@ export function createTrees(scene) {
   const group = new THREE.Group();
   const foliage = [palette.foliageA, palette.foliageB, palette.foliageC];
 
-  // Só nas bordas da fazenda (vila/caverna são instâncias separadas)
-  const positions = [
-    [-26, -16], [26, -16], [-26, 10], [26, 10],
-    [-28, 0], [28, 0], [-22, -10], [22, -12],
-    [-24, 6], [24, 6], [0, -17], [-10, -16], [10, -16]
+  const positions = getMap()?.trees || [
+    [-26, -16], [26, -16], [-26, 8], [26, 8],
+    [0, -22], [-10, -22], [10, -22], [-18, 24], [18, 24]
   ];
 
   const eyesGroup = new THREE.Group();
@@ -1049,7 +1292,7 @@ export function createTrees(scene) {
   positions.forEach((pos, idx) => {
     const scale = 0.85 + (idx % 5) * 0.08;
     const tree = buildVoxelTree(scale, foliage[idx % foliage.length], palette.woodMid);
-    tree.position.set(pos[0], 0, pos[1]);
+    placeOnTerrain(tree, pos[0], pos[1], 'farm');
     tree.rotation.y = (idx * 0.7) % (Math.PI * 2);
     tree.traverse(obj => {
       if (obj.isMesh) {
@@ -1068,7 +1311,10 @@ export function createTrees(scene) {
 
     if (idx % 3 === 0) {
       const angleToCenter = Math.atan2(-pos[1], -pos[0]) + Math.PI / 2;
-      const eyes = buildLurkingEyes(pos[0] * 0.9, 1.1, pos[1] * 0.9, angleToCenter);
+      const eyesX = pos[0] * 0.9;
+      const eyesZ = pos[1] * 0.9;
+      const eyesY = getGroundHeightAt(eyesX, eyesZ, 'farm') + 1.1;
+      const eyes = buildLurkingEyes(eyesX, eyesY, eyesZ, angleToCenter);
       eyesGroup.add(eyes);
     }
   });
@@ -1113,7 +1359,7 @@ export function createWindmill(scene) {
   }
   group.add(hub);
 
-  group.position.set(14, 0, -4);
+  placeOnTerrain(group, WINDMILL_POSITION.x, WINDMILL_POSITION.z, 'farm');
   scene.add(group);
   registerObstacle(group.position.x, group.position.z, 0.85);
   return { group, hub };
@@ -1125,12 +1371,12 @@ export function createWindmill(scene) {
 
 export function createHouse(scene, level) {
   const group = new THREE.Group();
-  group.position.set(HOUSE_POSITION.x, 0, HOUSE_POSITION.z);
+  placeOnTerrain(group, HOUSE_POSITION.x, HOUSE_POSITION.z, 'farm');
   scene.add(group);
   buildHouse(group, level);
-  const w = group.userData.width || 3.2;
-  const d = group.userData.depth || 2.8;
-  registerObstacle(group.position.x, group.position.z, Math.max(w, d) * 0.55 + 0.6);
+  const w = group.userData.width || 5.2;
+  const d = group.userData.depth || 4.4;
+  registerOrientedBox(group.position.x, group.position.z, w, d, 0, 'farm');
   return group;
 }
 
@@ -1140,11 +1386,20 @@ export function buildHouse(group, level) {
   const wallMat = mat(palette.wallCream, { roughness: 0.78 });
   const woodMat = mat(palette.woodLight, { roughness: 0.85 });
   const trimMat = mat(palette.trimWhite, { roughness: 0.6 });
-  const glassMat = new THREE.MeshStandardMaterial({ color: 0x9fd8f5, roughness: 0.1, metalness: 0.1, transparent: true, opacity: 0.85, flatShading: true });
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: 0xffd89a, roughness: 0.28, metalness: 0.08, transparent: true, opacity: 0.9, flatShading: true,
+    emissive: 0xffc878, emissiveIntensity: 0.55
+  });
 
-  const width = level === 1 ? 3.2 : 4.2;
-  const depth = level === 1 ? 2.8 : 3.6;
-  const height = level === 1 ? 2.4 : 3.0;
+  const width = level === 1 ? 5.2 : 6.6;
+  const depth = level === 1 ? 4.4 : 5.4;
+  const height = level === 1 ? 3.6 : 4.4;
+
+  const plinthMat = mat(palette.stoneGrey, { roughness: 0.88 });
+  const plinthH = 0.35;
+  const plinth = voxelBox(width + 0.1, plinthH, depth + 0.1, plinthMat);
+  plinth.position.y = -plinthH / 2;
+  group.add(plinth);
 
   const base = voxelBox(width, height, depth, wallMat);
   base.position.y = height / 2;
@@ -1158,31 +1413,54 @@ export function buildHouse(group, level) {
     overhang: 0.25
   });
 
-  const chimney = voxelBox(0.35, 0.9, 0.35, palette.stoneGrey);
-  chimney.position.set(-width * 0.25, height + 0.95, -depth * 0.15);
+  const chimney = voxelBox(0.45, 1.15, 0.45, palette.stoneGrey);
+  chimney.position.set(-width * 0.25, height + 1.15, -depth * 0.15);
   group.add(chimney);
+  group.userData.chimney = chimney;
+
+  // Anexo lateral (alcova) para quebrar a silhueta de caixa única.
+  const annexW = width * 0.34;
+  const annexD = depth * 0.62;
+  const annexH = height * 0.68;
+  const annexGroup = new THREE.Group();
+  annexGroup.position.set(width / 2 + annexW / 2 - 0.05, 0, -depth / 2 + annexD / 2 + 0.15);
+  const annex = voxelBox(annexW, annexH, annexD, wallMat);
+  annex.position.y = annexH / 2;
+  annexGroup.add(annex);
+  voxelStairRoof(annexGroup, {
+    width: annexW, depth: annexD, baseY: annexH,
+    color: palette.roofHouse, layers: 2, stepH: 0.22, overhang: 0.16
+  });
+  group.add(annexGroup);
 
   const windowPositions = level === 1
-    ? [[-0.7, depth / 2 + 0.03]]
-    : [[-1.1, depth / 2 + 0.03], [1.1, depth / 2 + 0.03]];
+    ? [[-1.15, depth / 2 + 0.03]]
+    : [[-1.7, depth / 2 + 0.03], [1.7, depth / 2 + 0.03]];
 
   windowPositions.forEach(([wx]) => {
-    const frame = voxelBox(0.7, 0.7, 0.1, trimMat);
-    frame.position.set(wx, height * 0.55, depth / 2 + 0.02);
+    const frame = voxelBox(0.95, 0.9, 0.12, trimMat);
+    frame.position.set(wx, height * 0.52, depth / 2 + 0.02);
     group.add(frame);
-    const glass = voxelBox(0.5, 0.5, 0.05, glassMat);
-    glass.position.set(wx, height * 0.55, depth / 2 + 0.08);
+    const glass = voxelBox(0.7, 0.65, 0.06, glassMat);
+    glass.position.set(wx, height * 0.52, depth / 2 + 0.08);
     group.add(glass);
   });
 
-  const door = voxelBox(0.7, 1.2, 0.08, 0x8a5a3a);
-  door.position.set(width / 2 - 0.7, 0.6, depth / 2 + 0.05);
+  const sideFrame = voxelBox(0.1, 0.85, 0.75, trimMat);
+  sideFrame.position.set(-width / 2 - 0.02, height * 0.55, depth * 0.1);
+  group.add(sideFrame);
+  const sideGlass = voxelBox(0.06, 0.6, 0.55, glassMat);
+  sideGlass.position.set(-width / 2 - 0.08, height * 0.55, depth * 0.1);
+  group.add(sideGlass);
+
+  const door = voxelBox(0.95, 2.1, 0.1, 0x8a5a3a);
+  door.position.set(width / 2 - 1.05, 1.05, depth / 2 + 0.05);
   group.add(door);
   const knob = voxelBox(0.08, 0.08, 0.08, 0xd8b23a);
-  knob.position.set(width / 2 - 0.9, 0.6, depth / 2 + 0.12);
+  knob.position.set(width / 2 - 1.35, 1.05, depth / 2 + 0.12);
   group.add(knob);
 
-  const porchDepth = 1.2;
+  const porchDepth = 1.7;
   const porchFloor = voxelBox(width + 0.4, 0.14, porchDepth, woodMat);
   porchFloor.position.set(0, 0.07, depth / 2 + porchDepth / 2);
   group.add(porchFloor);
@@ -1219,7 +1497,7 @@ export function buildHouse(group, level) {
   lanternGroup.add(cage);
   const lanternGlass = voxelBox(0.12, 0.14, 0.12, lanternGlassMat);
   lanternGroup.add(lanternGlass);
-  const lanternLight = new THREE.PointLight(0xffb347, 0, 5, 2);
+  const lanternLight = new THREE.PointLight(0xffc878, 0, 12, 1.7);
   lanternGroup.add(lanternLight);
   lanternGroup.position.set(-width / 4, height * 0.7, depth / 2 + porchDepth - 0.2);
   group.add(lanternGroup);
@@ -1302,7 +1580,7 @@ function buildRockingChairNpc(woodMat) {
 
 export function createCar(scene) {
   const group = new THREE.Group();
-  group.position.set(5.5, 0, -5.5);
+  placeOnTerrain(group, CAR_POSITION.x, CAR_POSITION.z, 'farm');
   group.rotation.y = Math.PI;
   scene.add(group);
   registerObstacle(group.position.x, group.position.z, 1.6);
@@ -1358,9 +1636,9 @@ export function createBarn(scene) {
   const trimMat = mat(palette.trimWhite, { roughness: 0.6 });
   const woodMat = mat(palette.woodDark, { roughness: 0.85 });
 
-  const width = 4.0;
-  const depth = 3.6;
-  const wallHeight = 2.8;
+  const width = 6.4;
+  const depth = 5.6;
+  const wallHeight = 4.5;
 
   const base = voxelBox(width, wallHeight, depth, wallMat);
   base.position.y = wallHeight / 2;
@@ -1369,22 +1647,22 @@ export function createBarn(scene) {
   voxelStairRoof(group, {
     width, depth, baseY: wallHeight,
     color: palette.roofSlate,
-    layers: 3,
-    stepH: 0.28,
-    overhang: 0.25
+    layers: 4,
+    stepH: 0.3,
+    overhang: 0.32
   });
 
-  const door = voxelBox(1.4, 1.8, 0.1, woodMat);
-  door.position.set(0, 0.9, depth / 2 + 0.05);
+  const door = voxelBox(1.9, 2.5, 0.12, woodMat);
+  door.position.set(0, 1.25, depth / 2 + 0.06);
   group.add(door);
-  const loft = voxelBox(0.8, 0.8, 0.08, trimMat);
-  loft.position.set(0, 2.1, depth / 2 + 0.04);
+  const loft = voxelBox(1.1, 1.0, 0.1, trimMat);
+  loft.position.set(0, 3.35, depth / 2 + 0.05);
   group.add(loft);
 
-  group.position.set(BARN_POSITION.x, 0, BARN_POSITION.z);
+  placeOnTerrain(group, BARN_POSITION.x, BARN_POSITION.z, 'farm');
   group.rotation.y = -0.15;
   scene.add(group);
-  registerObstacle(group.position.x, group.position.z, 2.4);
+  registerOrientedBox(group.position.x, group.position.z, width, depth, group.rotation.y, 'farm');
   return group;
 }
 
@@ -1397,19 +1675,19 @@ export function createSilo(scene) {
   const metalMat = mat(palette.metalLight, { roughness: 0.5, metalness: 0.3 });
   const trimMat = mat(0x8a2c22, { roughness: 0.45 });
 
-  for (let i = 0; i < 4; i++) {
-    const ring = voxelBox(1.6, 0.85, 1.6, metalMat);
-    ring.position.y = 0.45 + i * 0.85;
+  for (let i = 0; i < 5; i++) {
+    const ring = voxelBox(2.2, 0.95, 2.2, metalMat);
+    ring.position.y = 0.5 + i * 0.95;
     group.add(ring);
-    const band = voxelBox(1.7, 0.1, 1.7, trimMat);
-    band.position.y = 0.85 + i * 0.85;
+    const band = voxelBox(2.32, 0.12, 2.32, trimMat);
+    band.position.y = 0.95 + i * 0.95;
     group.add(band);
   }
-  voxelStairRoof(group, { width: 1.6, depth: 1.6, baseY: 3.5, color: 0x8a2c22, layers: 2, stepH: 0.28, overhang: 0.1 });
+  voxelStairRoof(group, { width: 2.2, depth: 2.2, baseY: 4.85, color: 0x8a2c22, layers: 2, stepH: 0.3, overhang: 0.12 });
 
-  group.position.set(13.5, 0, -13.5);
+  placeOnTerrain(group, SILO_POSITION.x, SILO_POSITION.z, 'farm');
   scene.add(group);
-  registerObstacle(group.position.x, group.position.z, 1.1);
+  registerObstacle(group.position.x, group.position.z, 1.45);
   return group;
 }
 
@@ -1427,6 +1705,10 @@ function buildStandingNpc({ shirt, pants, skin, accessory }) {
 
 // Mercador (compra colheitas/produtos, entrega pedidos especiais) — fica perto
 // do celeiro, com um cesto de vime ao lado para reforçar a leitura de "comprador".
+function faceToward(npc, targetX, targetZ) {
+  npc.rotation.y = Math.atan2(targetX - npc.position.x, targetZ - npc.position.z);
+}
+
 export function createMerchantNpc(scene) {
   const npc = buildStandingNpc({ shirt: 0x3f7cbf, pants: 0x35507a, skin: 0xdba374, accessory: 'hat' });
 
@@ -1435,12 +1717,13 @@ export function createMerchantNpc(scene) {
   basket.position.set(0.45, 0.18, 0.1);
   npc.add(basket);
 
-  npc.position.set(6.5, 0, 24.5);
-  npc.rotation.y = Math.PI * 0.85;
+  const stand = VILLAGE_LAYOUT.merchantStand;
+  placeOnTerrain(npc, stand.x, stand.z, 'farm');
+  faceToward(npc, VILLAGE_PLAZA.x, VILLAGE_PLAZA.z);
   npc.userData.isNpc = true;
   npc.userData.npcId = 'merchant';
-  npc.userData.standPosition = { x: 6.5, z: 24.5 };
-  npc.userData.homeShelter = { x: 10.5, z: 28.5 };
+  npc.userData.standPosition = { x: stand.x, z: stand.z };
+  npc.userData.homeShelter = { x: VILLAGE_LAYOUT.merchantHome.x, z: VILLAGE_LAYOUT.merchantHome.z };
   scene.add(npc);
   return npc;
 }
@@ -1467,12 +1750,13 @@ export function createSupplierNpc(scene) {
     npc.add(sack);
   });
 
-  npc.position.set(-6.5, 0, 24.5);
-  npc.rotation.y = Math.PI * -0.2;
+  const stand = VILLAGE_LAYOUT.supplierStand;
+  placeOnTerrain(npc, stand.x, stand.z, 'farm');
+  faceToward(npc, VILLAGE_PLAZA.x, VILLAGE_PLAZA.z);
   npc.userData.isNpc = true;
   npc.userData.npcId = 'supplier';
-  npc.userData.standPosition = { x: -6.5, z: 24.5 };
-  npc.userData.homeShelter = { x: -10.5, z: 28.5 };
+  npc.userData.standPosition = { x: stand.x, z: stand.z };
+  npc.userData.homeShelter = { x: VILLAGE_LAYOUT.supplierHome.x, z: VILLAGE_LAYOUT.supplierHome.z };
   scene.add(npc);
   return npc;
 }
@@ -1492,12 +1776,13 @@ export function createGovOfficialNpc(scene) {
   clipboardPaper.rotation.y = -0.3;
   npc.add(clipboardPaper);
 
-  npc.position.set(0, 0, 28.2);
-  npc.rotation.y = Math.PI * 1.05;
+  const stand = VILLAGE_LAYOUT.govStand;
+  placeOnTerrain(npc, stand.x, stand.z, 'farm');
+  faceToward(npc, VILLAGE_PLAZA.x, VILLAGE_PLAZA.z);
   npc.userData.isNpc = true;
   npc.userData.npcId = 'gov';
-  npc.userData.standPosition = { x: 0, z: 28.2 };
-  npc.userData.homeShelter = { x: 0, z: 31.0 };
+  npc.userData.standPosition = { x: stand.x, z: stand.z };
+  npc.userData.homeShelter = { x: VILLAGE_LAYOUT.govHome.x, z: VILLAGE_LAYOUT.govHome.z };
   scene.add(npc);
   return npc;
 }
@@ -1527,7 +1812,7 @@ export function createWell(scene) {
   group.add(beam);
   voxelStairRoof(group, { width: 1.5, depth: 1.0, baseY: 1.7, color: palette.roofSlate, layers: 2, stepH: 0.18, overhang: 0.1 });
 
-  group.position.set(-6.5, 0, -3.5);
+  placeOnTerrain(group, WELL_POSITION.x, WELL_POSITION.z, 'farm');
   scene.add(group);
   registerObstacle(group.position.x, group.position.z, 0.85);
   return group;
@@ -1551,20 +1836,27 @@ export function createArtesianWell(scene) {
   handle.position.set(0.7, 1.35, 0);
   group.add(handle);
 
-  group.position.set(-10.5, 0, -2.0);
+  placeOnTerrain(group, ARTESIAN_WELL_POSITION.x, ARTESIAN_WELL_POSITION.z, 'farm');
   scene.add(group);
   registerObstacle(group.position.x, group.position.z, 0.95);
   return group;
 }
 
 
-function buildVillageCottage({ width = 2.6, depth = 2.4, height = 2.0, wallColor, roofColor }) {
+function buildVillageCottage({ width = 4.4, depth = 3.8, height = 3.4, wallColor, roofColor }) {
   const group = new THREE.Group();
   const wallMat = mat(wallColor, { roughness: 0.78 });
   const woodMat = mat(palette.woodMid, { roughness: 0.85 });
   const glassMat = new THREE.MeshStandardMaterial({
-    color: 0x9fd8f5, roughness: 0.1, metalness: 0.1, transparent: true, opacity: 0.85, flatShading: true
+    color: 0xffd89a, roughness: 0.35, metalness: 0.05, transparent: true, opacity: 0.92, flatShading: true,
+    emissive: 0xffb24a, emissiveIntensity: 0.7
   });
+
+  const plinthMat = mat(palette.stoneGrey, { roughness: 0.88 });
+  const plinthH = 0.28;
+  const plinth = voxelBox(width + 0.1, plinthH, depth + 0.1, plinthMat);
+  plinth.position.y = -plinthH / 2;
+  group.add(plinth);
 
   const base = voxelBox(width, height, depth, wallMat);
   base.position.y = height / 2;
@@ -1573,19 +1865,25 @@ function buildVillageCottage({ width = 2.6, depth = 2.4, height = 2.0, wallColor
   voxelStairRoof(group, {
     width, depth, baseY: height,
     color: roofColor,
-    layers: 3,
-    stepH: 0.22,
-    overhang: 0.18
+    layers: 4,
+    stepH: 0.24,
+    overhang: 0.22
   });
 
-  const door = voxelBox(0.55, 1.1, 0.08, woodMat);
-  door.position.set(0, 0.55, depth / 2 + 0.04);
+  const door = voxelBox(0.9, 2.05, 0.1, woodMat);
+  door.position.set(0, 1.025, depth / 2 + 0.05);
   group.add(door);
 
-  const win = voxelBox(0.4, 0.4, 0.06, glassMat);
-  win.position.set(-width * 0.28, height * 0.55, depth / 2 + 0.03);
+  const win = voxelBox(0.6, 0.7, 0.08, glassMat);
+  win.position.set(-width * 0.28, height * 0.55, depth / 2 + 0.04);
   group.add(win);
 
+  const win2 = voxelBox(0.6, 0.7, 0.08, glassMat);
+  win2.position.set(width * 0.28, height * 0.55, depth / 2 + 0.04);
+  group.add(win2);
+
+  group.userData.width = width;
+  group.userData.depth = depth;
   return group;
 }
 
@@ -1594,22 +1892,22 @@ function buildMarketStall() {
   const woodMat = mat(palette.woodMid, { roughness: 0.85 });
   const clothMat = mat(0xd45a3a, { roughness: 0.75 });
 
-  const counter = voxelBox(2.0, 0.7, 1.0, woodMat);
-  counter.position.y = 0.45;
+  const counter = voxelBox(2.8, 0.9, 1.25, woodMat);
+  counter.position.y = 0.55;
   group.add(counter);
 
-  [[-0.85, 1.4], [0.85, 1.4]].forEach(([x, y]) => {
-    const post = voxelBox(0.12, y, 0.12, woodMat);
-    post.position.set(x, y / 2, -0.3);
+  [[-1.2, 2.05], [1.2, 2.05]].forEach(([x, y]) => {
+    const post = voxelBox(0.14, y, 0.14, woodMat);
+    post.position.set(x, y / 2, -0.35);
     group.add(post);
   });
 
-  const awning = voxelBox(2.2, 0.1, 1.3, clothMat);
-  awning.position.set(0, 1.4, 0.05);
+  const awning = voxelBox(3.1, 0.12, 1.7, clothMat);
+  awning.position.set(0, 2.08, 0.08);
   group.add(awning);
 
-  [[-0.5, 0.9, 0.15], [0.2, 0.88, 0.15], [0.6, 0.86, 0.1]].forEach(([x, y, z]) => {
-    const crate = voxelBox(0.3, 0.24, 0.28, 0xc9b56a);
+  [[-0.7, 1.12, 0.2], [0.15, 1.1, 0.2], [0.85, 1.08, 0.15]].forEach(([x, y, z]) => {
+    const crate = voxelBox(0.38, 0.3, 0.34, 0xc9b56a);
     crate.position.set(x, y, z);
     group.add(crate);
   });
@@ -1619,34 +1917,34 @@ function buildMarketStall() {
 
 function buildBakeryShop() {
   const group = buildVillageCottage({
-    width: 3.0, depth: 2.6, height: 2.2,
+    width: 5.0, depth: 4.2, height: 3.6,
     wallColor: palette.wallCream, roofColor: 0xb85a28
   });
-  const sign = voxelBox(1.0, 0.35, 0.08, 0xf4e4c8);
-  sign.position.set(0, 2.0, 1.4);
+  const sign = voxelBox(1.4, 0.45, 0.1, 0xf4e4c8);
+  sign.position.set(0, 2.85, 2.2);
   group.add(sign);
   return group;
 }
 
-export function createAlarmBell(parent, position = { x: 0, z: 18.4 }, areaId = 'village') {
+export function createAlarmBell(parent, position = { x: 0, z: 18.4 }, areaId = 'farm') {
   const group = new THREE.Group();
   const stoneMat = mat(palette.stoneGrey, { roughness: 0.85 });
   const bellMat = mat(0xc9a13a, { roughness: 0.35, metalness: 0.5 });
 
-  const tower = voxelBox(1.4, 3.2, 1.4, stoneMat);
-  tower.position.y = 1.6;
+  const tower = voxelBox(1.7, 4.0, 1.7, stoneMat);
+  tower.position.y = 2.0;
   group.add(tower);
 
-  voxelStairRoof(group, { width: 1.6, depth: 1.6, baseY: 3.2, color: palette.roofSlate, layers: 2, stepH: 0.28, overhang: 0.15 });
+  voxelStairRoof(group, { width: 1.9, depth: 1.9, baseY: 4.0, color: palette.roofSlate, layers: 2, stepH: 0.3, overhang: 0.18 });
 
-  const bell = voxelBox(0.5, 0.55, 0.5, bellMat);
-  bell.position.set(0, 3.6, 0);
+  const bell = voxelBox(0.6, 0.65, 0.6, bellMat);
+  bell.position.set(0, 4.45, 0);
   group.add(bell);
 
   group.userData.bell = bell;
-  group.position.set(position.x, 0, position.z);
+  placeOnTerrain(group, position.x, position.z, areaId);
   parent.add(group);
-  registerObstacle(group.position.x, group.position.z, 0.95, areaId);
+  registerObstacle(group.position.x, group.position.z, 1.15, areaId);
   return group;
 }
 
@@ -1654,7 +1952,7 @@ export function createAlarmBell(parent, position = { x: 0, z: 18.4 }, areaId = '
 export function createVillageGate(parent) {
   const group = new THREE.Group();
   group.name = 'villageGate';
-  group.position.set(VILLAGE_GATE.x, 0, VILLAGE_GATE.z);
+  placeOnTerrain(group, VILLAGE_GATE.x, VILLAGE_GATE.z, 'farm');
 
   const woodMat = mat(palette.woodMid, { roughness: 0.85 });
   const stoneMat = mat(palette.stoneGrey, { roughness: 0.9 });
@@ -1676,9 +1974,27 @@ export function createVillageGate(parent) {
   group.add(signPost);
 
   parent.add(group);
-  // Não bloqueia o caminho — só marca o portal
+  // Decoração do caminho fazenda → vila (mesmo overworld, sem portal)
+  return group;
+}
+
+/** Placa na trilha leste — portal fazenda → lago (área própria). */
+export function createLakeGate(parent) {
+  const group = new THREE.Group();
+  group.name = 'lakeGate';
+  placeOnTerrain(group, LAKE_GATE.x, LAKE_GATE.z, 'farm');
+
+  const woodMat = mat(palette.woodMid, { roughness: 0.85 });
+  const post = voxelBox(0.14, 1.4, 0.14, woodMat);
+  post.position.y = 0.7;
+  group.add(post);
+  const sign = voxelBox(1.0, 0.5, 0.1, 0xf4e4c8);
+  sign.position.set(0, 1.25, 0.08);
+  group.add(sign);
+
+  parent.add(group);
   group.userData.isPortal = true;
-  group.userData.portalId = 'farm_to_village';
+  group.userData.portalId = 'farm_to_lake';
   return group;
 }
 
@@ -1686,7 +2002,7 @@ export function createVillageGate(parent) {
 export function createVillageExitSign(parent) {
   const group = new THREE.Group();
   const z = VILLAGE_PLAZA.z - 6.5;
-  group.position.set(VILLAGE_PLAZA.x, 0, z);
+  placeOnTerrain(group, VILLAGE_PLAZA.x, z, 'farm');
   const woodMat = mat(palette.woodMid, { roughness: 0.85 });
   const post = voxelBox(0.14, 1.5, 0.14, woodMat);
   post.position.y = 0.75;
@@ -1694,8 +2010,6 @@ export function createVillageExitSign(parent) {
   const sign = voxelBox(1.2, 0.55, 0.1, 0xf4e4c8);
   sign.position.set(0, 1.35, 0.08);
   group.add(sign);
-  group.userData.isPortal = true;
-  group.userData.portalId = 'village_to_farm';
   parent.add(group);
   return group;
 }
@@ -1704,7 +2018,7 @@ export function createVillageExitSign(parent) {
 export function createCaveEntrance(parent) {
   const group = new THREE.Group();
   group.name = 'caveEntrance';
-  group.position.set(CAVE_POSITION.x, 0, CAVE_POSITION.z);
+  placeOnTerrain(group, CAVE_POSITION.x, CAVE_POSITION.z, 'farm');
 
   const rockMat = voxelMat(0x6a6560, { roughness: 0.92 });
   const mound = voxelBox(5.5, 2.8, 4.2, rockMat);
@@ -1732,101 +2046,201 @@ export function createCaveEntrance(parent) {
 }
 
 export function createVillage(parent) {
-  beginObstacleRegistration('village');
+  beginObstacleRegistration('farm');
   const village = new THREE.Group();
   village.name = 'village';
 
   const plazaMat = mat(0xb8b0a0, { roughness: 0.92 });
+  const plazaGroundY = getGroundHeightAt(VILLAGE_PLAZA.x, VILLAGE_PLAZA.z, 'farm');
   for (let x = -2; x <= 2; x++) {
     for (let z = -2; z <= 2; z++) {
       if (Math.hypot(x, z) > 2.3) continue;
       const tile = voxelBox(1.05, 0.1, 1.05, plazaMat);
-      tile.position.set(x * 1.05, 0.05, VILLAGE_PLAZA.z + z * 1.05);
+      tile.position.set(VILLAGE_PLAZA.x + x * 1.05, plazaGroundY + 0.05, VILLAGE_PLAZA.z + z * 1.05);
       village.add(tile);
     }
   }
 
   const fountainBase = voxelBox(1.6, 0.5, 1.6, palette.stoneGrey);
-  fountainBase.position.set(VILLAGE_PLAZA.x, 0.25, VILLAGE_PLAZA.z);
+  fountainBase.position.set(VILLAGE_PLAZA.x, plazaGroundY + 0.25, VILLAGE_PLAZA.z);
   village.add(fountainBase);
   const water = voxelBox(1.1, 0.15, 1.1, new THREE.MeshStandardMaterial({
     color: 0x5eb0d8, roughness: 0.2, metalness: 0.15, transparent: true, opacity: 0.85, flatShading: true
   }));
-  water.position.set(VILLAGE_PLAZA.x, 0.52, VILLAGE_PLAZA.z);
+  water.position.set(VILLAGE_PLAZA.x, plazaGroundY + 0.52, VILLAGE_PLAZA.z);
   village.add(water);
-  registerObstacle(VILLAGE_PLAZA.x, VILLAGE_PLAZA.z, 1.0, 'village');
+  registerObstacle(VILLAGE_PLAZA.x, VILLAGE_PLAZA.z, 0.85, 'farm');
 
   const benchMat = mat(palette.woodMid, { roughness: 0.85 });
-  [[-3.2, 23.5], [3.2, 23.5]].forEach(([x, z]) => {
+  (VILLAGE_LAYOUT.benches || []).forEach(([x, z]) => {
     const bench = new THREE.Group();
-    const seat = voxelBox(1.2, 0.12, 0.4, benchMat);
-    seat.position.y = 0.4;
+    const seat = voxelBox(1.4, 0.14, 0.45, benchMat);
+    seat.position.y = 0.48;
     bench.add(seat);
-    const back = voxelBox(1.2, 0.4, 0.08, benchMat);
-    back.position.set(0, 0.65, -0.16);
+    const back = voxelBox(1.4, 0.5, 0.1, benchMat);
+    back.position.set(0, 0.78, -0.18);
     bench.add(back);
-    bench.position.set(x, 0, z);
+    placeOnTerrain(bench, x, z, 'farm');
     village.add(bench);
   });
 
   const merchantHome = buildVillageCottage({ wallColor: 0xe8d5b5, roofColor: 0x6a3a28 });
-  merchantHome.position.set(10.5, 0, 28.5);
+  placeOnTerrain(merchantHome, VILLAGE_LAYOUT.merchantHome.x, VILLAGE_LAYOUT.merchantHome.z, 'farm');
+  merchantHome.rotation.y = Math.PI;
   village.add(merchantHome);
-  registerObstacle(10.5, 28.5, 1.6, 'village');
+  registerOrientedBox(VILLAGE_LAYOUT.merchantHome.x, VILLAGE_LAYOUT.merchantHome.z, 4.4, 3.8, Math.PI, 'farm');
 
   const supplierHome = buildVillageCottage({ wallColor: 0xdce8d0, roofColor: 0x4a6a38 });
-  supplierHome.position.set(-10.5, 0, 28.5);
+  placeOnTerrain(supplierHome, VILLAGE_LAYOUT.supplierHome.x, VILLAGE_LAYOUT.supplierHome.z, 'farm');
+  supplierHome.rotation.y = Math.PI;
   village.add(supplierHome);
-  registerObstacle(-10.5, 28.5, 1.6, 'village');
+  registerOrientedBox(VILLAGE_LAYOUT.supplierHome.x, VILLAGE_LAYOUT.supplierHome.z, 4.4, 3.8, Math.PI, 'farm');
 
   const govHome = buildVillageCottage({
-    width: 2.6, depth: 2.4, height: 2.0,
+    width: 4.6, depth: 4.0, height: 3.6,
     wallColor: 0xd8dce8, roofColor: palette.roofSlate
   });
-  govHome.position.set(0, 0, 31.5);
+  placeOnTerrain(govHome, VILLAGE_LAYOUT.govHome.x, VILLAGE_LAYOUT.govHome.z, 'farm');
+  govHome.rotation.y = Math.PI;
   village.add(govHome);
-  registerObstacle(0, 31.5, 1.5, 'village');
+  registerOrientedBox(VILLAGE_LAYOUT.govHome.x, VILLAGE_LAYOUT.govHome.z, 4.6, 4.0, Math.PI, 'farm');
 
   const bakery = buildBakeryShop();
-  bakery.position.set(9.0, 0, 21.5);
+  placeOnTerrain(bakery, VILLAGE_LAYOUT.bakery.x, VILLAGE_LAYOUT.bakery.z, 'farm');
   village.add(bakery);
-  registerObstacle(9.0, 21.5, 1.8, 'village');
+  registerOrientedBox(VILLAGE_LAYOUT.bakery.x, VILLAGE_LAYOUT.bakery.z, 5.0, 4.2, 0, 'farm');
 
   const stall = buildMarketStall();
-  stall.position.set(-8.5, 0, 22.0);
+  placeOnTerrain(stall, VILLAGE_LAYOUT.stall.x, VILLAGE_LAYOUT.stall.z, 'farm');
   village.add(stall);
-  registerObstacle(-8.5, 22.0, 1.3, 'village');
+  registerOrientedBox(VILLAGE_LAYOUT.stall.x, VILLAGE_LAYOUT.stall.z, 2.6, 2.2, 0, 'farm');
+
+  (VILLAGE_LAYOUT.extraHomes || []).forEach(home => {
+    const cottage = buildVillageCottage({ wallColor: home.wall, roofColor: home.roof });
+    placeOnTerrain(cottage, home.x, home.z, 'farm');
+    cottage.rotation.y = home.yaw || 0;
+    village.add(cottage);
+    registerOrientedBox(home.x, home.z, 4.4, 3.8, home.yaw || 0, 'farm');
+  });
 
   const lampMat = mat(palette.metalDark, { roughness: 0.5, metalness: 0.4 });
-  const lampGlow = mat(0xfff0c0, { emissive: 0xffe08a, emissiveIntensity: 0.45, roughness: 0.4 });
-  [[-4.5, 26.5], [4.5, 26.5], [0, 22.5]].forEach(([x, z]) => {
+  const lampGlow = mat(0xfff0c0, { emissive: 0xffe08a, emissiveIntensity: 1.1, roughness: 0.35 });
+  (VILLAGE_LAYOUT.lamps || []).forEach(([x, z]) => {
     const lamp = new THREE.Group();
-    const pole = voxelBox(0.12, 2.2, 0.12, lampMat);
-    pole.position.y = 1.1;
+    const pole = voxelBox(0.14, 2.8, 0.14, lampMat);
+    pole.position.y = 1.4;
     lamp.add(pole);
-    const bulb = voxelBox(0.28, 0.28, 0.28, lampGlow);
-    bulb.position.y = 2.3;
+    const bulb = voxelBox(0.32, 0.32, 0.32, lampGlow);
+    bulb.position.y = 2.9;
     lamp.add(bulb);
-    lamp.position.set(x, 0, z);
+    const light = new THREE.PointLight(0xffc878, 1.65, 11, 1.6);
+    light.position.y = 2.85;
+    lamp.add(light);
+    placeOnTerrain(lamp, x, z, 'farm');
     village.add(lamp);
-    registerObstacle(x, z, 0.25, 'village');
+    registerObstacle(x, z, 0.18, 'farm');
   });
 
   createVillageExitSign(village);
-  const alarmBell = createAlarmBell(village, { x: 3.5, z: 29.5 }, 'village');
+  const alarmBell = createAlarmBell(village, VILLAGE_LAYOUT.alarmBell || { x: 4.4, z: 46.2 }, 'farm');
+  addVillageClutter(village);
 
   parent.add(village);
-  beginObstacleRegistration('farm');
 
   return {
     group: village,
     alarmBell,
     shelters: {
-      merchant: { x: 10.5, z: 28.5 },
-      supplier: { x: -10.5, z: 28.5 },
-      gov: { x: 0, z: 31.5 }
+      merchant: { x: VILLAGE_LAYOUT.merchantHome.x, z: VILLAGE_LAYOUT.merchantHome.z },
+      supplier: { x: VILLAGE_LAYOUT.supplierHome.x, z: VILLAGE_LAYOUT.supplierHome.z },
+      gov: { x: VILLAGE_LAYOUT.govHome.x, z: VILLAGE_LAYOUT.govHome.z }
     }
   };
+}
+
+export function layNpcCorpse(npc, { yaw = 0, hint = '' } = {}) {
+  npc.userData.dead = true;
+  npc.userData.fleeing = false;
+  npc.userData.tookShelter = false;
+  npc.userData.deathHint = hint || 'O corpo está frio. Não há o que fazer.';
+  npc.visible = true;
+  const side = Math.random() > 0.5 ? 1 : -1;
+  npc.rotation.set(0.12 * side, yaw, side * Math.PI / 2);
+  npc.position.y = getGroundHeightAt(npc.position.x, npc.position.z, 'farm') + 0.16;
+  return npc;
+}
+
+export function createVillageCorpses(parent) {
+  const palettes = [
+    { shirt: 0x7a4a3a, pants: 0x3a322c, skin: 0xc8a078, accessory: null },
+    { shirt: 0x4a5a6a, pants: 0x2a2e32, skin: 0xd4b08a, accessory: 'scarf' },
+    { shirt: 0x6a5a38, pants: 0x3a3428, skin: 0xe0b888, accessory: 'hat' },
+    { shirt: 0x5a3a48, pants: 0x2c2428, skin: 0xc4a070, accessory: null }
+  ];
+  const spots = VILLAGE_LAYOUT.corpseSpots || [];
+  return spots.map((spot, i) => {
+    const npc = buildStandingNpc(palettes[i % palettes.length]);
+    placeOnTerrain(npc, spot.x, spot.z, 'farm');
+    layNpcCorpse(npc, {
+      yaw: spot.yaw,
+      hint: 'Mais um vizinho que não sobreviveu à noite.'
+    });
+    npc.userData.isNpc = true;
+    npc.userData.npcId = 'villager';
+    parent.add(npc);
+    return npc;
+  });
+}
+
+function addVillageClutter(village) {
+  const wood = mat(palette.woodMid, { roughness: 0.88 });
+  const rust = mat(0x6a4530, { roughness: 0.9 });
+  const crateSpots = VILLAGE_LAYOUT.crates || [];
+  crateSpots.forEach(([x, z], i) => {
+    const crate = voxelBox(0.42 + (i % 2) * 0.1, 0.32, 0.38, i % 2 ? rust : wood);
+    placeOnTerrain(crate, x, z, 'farm');
+    crate.position.y += 0.16;
+    crate.rotation.y = i * 0.7;
+    village.add(crate);
+  });
+  (VILLAGE_LAYOUT.planks || []).forEach(([x, z, yaw]) => {
+    const plank = voxelBox(1.4, 0.08, 0.18, wood);
+    placeOnTerrain(plank, x, z, 'farm');
+    plank.position.y += 0.06;
+    plank.rotation.set(0.15, yaw, 0.4);
+    village.add(plank);
+  });
+}
+
+export function createNightClutter(parent) {
+  const group = new THREE.Group();
+  const wood = mat(palette.woodMid, { roughness: 0.88 });
+  const rust = mat(0x5a3a28, { roughness: 0.9 });
+  const clutterSpots = getMap()?.nightClutter || [[-2.4, -9.2], [3.1, -10.8], [-6.2, -7.4], [6.8, -6.2], [-1.2, -0.4]];
+  clutterSpots.forEach(([x, z], i) => {
+    const bit = voxelBox(0.34, 0.22, 0.28, i % 2 ? rust : wood);
+    placeOnTerrain(bit, x, z, 'farm');
+    bit.position.y += 0.12;
+    bit.rotation.y = i * 0.9;
+    group.add(bit);
+  });
+  const lanternSpots = getMap()?.lanterns || [[-3.6, -13.2], [2.8, -14.4]];
+  lanternSpots.forEach(([x, z]) => {
+    const lantern = new THREE.Group();
+    const pole = voxelBox(0.1, 1.6, 0.1, mat(palette.metalDark, { roughness: 0.5, metalness: 0.35 }));
+    pole.position.y = 0.8;
+    lantern.add(pole);
+    const glow = voxelBox(0.22, 0.22, 0.22, mat(0xffe08a, { emissive: 0xffc14a, emissiveIntensity: 1.2 }));
+    glow.position.y = 1.65;
+    lantern.add(glow);
+    const light = new THREE.PointLight(0xffc878, 1.1, 7.5, 1.8);
+    light.position.y = 1.6;
+    lantern.add(light);
+    placeOnTerrain(lantern, x, z, 'farm');
+    group.add(lantern);
+  });
+  parent.add(group);
+  return group;
 }
 
 // ---------------------------------------------------------------------------
@@ -1836,10 +2250,10 @@ export function createVillage(parent) {
 // ---------------------------------------------------------------------------
 
 const DECOR_SLOTS = {
-  flowerBed: [[-2.4, -5.5], [-2.4, -6.8], [2.4, -5.5]],
-  barrel: [[5.5, -6.5], [6.2, -6.0], [5.2, -5.5]],
-  scarecrow: [[0, 3.5]],
-  fancyFence: [[0, 0]]
+  flowerBed: [[-2.4, -9.5], [-2.4, -10.8], [2.4, -9.5]],
+  barrel: [[5.5, -10.5], [6.2, -10.0], [5.2, -9.5]],
+  scarecrow: [[0, 0.5]],
+  fancyFence: [[0, -4]]
 };
 
 function buildFlowerBed() {
@@ -1921,7 +2335,7 @@ export function createDecoration(scene, type, slotIndex) {
   const [x, z] = slots[slotIndex] || slots[0];
 
   const group = builder();
-  group.position.set(x, 0, z);
+  placeOnTerrain(group, x, z, 'farm');
   scene.add(group);
   registerObstacle(x, z, 0.5);
   return group;
