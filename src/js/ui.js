@@ -127,6 +127,8 @@ export function updateNetHud({ visible = false, text = '' } = {}) {
   el.classList.toggle('hidden', !visible);
   if (text) el.textContent = text;
 }
+
+export function updateHUD(state) {
   document.getElementById('money-display').textContent = `R$ ${state.money}`;
   document.getElementById('water-display').textContent = `${state.water} / ${state.maxWater}`;
   const seasonEl = document.getElementById('season-display');

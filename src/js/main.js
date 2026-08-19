@@ -120,7 +120,7 @@ const minigameCanvas = document.getElementById('cave-minigame-canvas');
 const minigameCtx = minigameCanvas.getContext('2d');
 const state = createGameState();
 const DEBUG_ENDPOINT = 'http://127.0.0.1:7299/ingest/8bc68156-38f8-493e-9aa8-401dffdaa1b4';
-const DEBUG_SESSION_ID = '9196a3';
+const DEBUG_SESSION_ID = 'f124a0';
 
 let scene, camera, renderer, composer, controls, bloomPass;
 let raycaster, mouse;
@@ -490,6 +490,9 @@ function bindInput() {
 }
 
 function bindUI() {
+  // #region agent log
+  debugLog('C', 'bindUI.start', { appState });
+  // #endregion
   bindModalCloses();
   bindUiClicks({
     'btn-shop': () => openGameModal('shop-modal'),
