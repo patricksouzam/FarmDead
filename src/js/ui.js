@@ -1,5 +1,4 @@
-import { LOW_ENERGY_THRESHOLD, seedCostFor, effectiveSaleBonus, DAYS_PER_SEASON } from './gameState.js';
-import { SEASONS, dayOfSeasonFor } from './seasons.js';
+import { LOW_ENERGY_THRESHOLD, seedCostFor, effectiveSaleBonus } from './gameState.js';
 import { FEED_RECIPE, SNACK_RECIPE, YARN_GIFT_RECIPE } from './crafting.js';
 import { ensureSurvival } from './survival.js';
 import { getWeaponDef } from './weapons.js';
@@ -131,18 +130,6 @@ export function updateNetHud({ visible = false, text = '' } = {}) {
 export function updateHUD(state) {
   document.getElementById('money-display').textContent = `R$ ${state.money}`;
   document.getElementById('water-display').textContent = `${state.water} / ${state.maxWater}`;
-  const seasonEl = document.getElementById('season-display');
-  if (seasonEl) seasonEl.textContent = state.season;
-
-  const seasonDaysEl = document.getElementById('season-days-display');
-  if (seasonDaysEl) {
-    const dayIn = dayOfSeasonFor(state.totalDays);
-    const left = Math.max(1, DAYS_PER_SEASON - dayIn);
-    const idx = SEASONS.indexOf(state.season);
-    const next = SEASONS[(idx + 1) % SEASONS.length];
-    seasonDaysEl.textContent = `${left} dia${left > 1 ? 's' : ''} · depois ${next}`;
-  }
-
   const energyEl = document.getElementById('energy-display');
   if (energyEl) {
     energyEl.textContent = `${state.energy} / ${state.maxEnergy}`;
@@ -190,6 +177,24 @@ export function updateHUD(state) {
   updateCraftLabels(state);
 }
 
+export function updateStealthHUD({ awareness = 0, flashlightOn = false } = {}) {
+  const bar = document.getElementById('awareness-bar');
+  if (bar) bar.style.width = `${Math.max(0, Math.min(100, awareness * 100))}%`;
+  const eye = document.getElementById('stealth-eye');
+  if (eye) {
+    const level = awareness >= 0.74 ? 'bang' : awareness >= 0.32 ? 'question' : 'calm';
+    eye.dataset.level = level;
+    eye.textContent = level === 'bang' ? '!' : level === 'question' ? '?' : '·';
+  }
+  const lamp = document.getElementById('flashlight-status');
+  if (lamp) {
+    lamp.textContent = flashlightOn ? 'LANTERNA ON' : 'LANTERNA OFF';
+    lamp.classList.toggle('on', flashlightOn);
+  }
+  const hud = document.getElementById('stealth-hud');
+  if (hud) hud.classList.toggle('alert', awareness >= 0.74);
+}
+
 function updateCraftLabels(state) {
   const feedText = document.getElementById('feed-count-text');
   if (feedText) feedText.textContent = `Ração: ${state.feed || 0} · ${FEED_RECIPE.wheatCost}× Trigo`;
@@ -204,29 +209,23 @@ function updateCraftLabels(state) {
   }
 }
 
-export function updateInventoryUI(state, onSell, onSellProduct, onSelectSeed) {
-  document.querySelectorAll('.seed-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.seed === state.activeSeedType);
-    const type = btn.dataset.seed;
-    if (type && state.seedConfigs[type]) {
-      const priceSpan = btn.querySelector('span:last-child');
-      if (priceSpan) priceSpan.textContent = `R$ ${seedCostFor(state, type)}`;
-    }
-  });
+let selectedInvKey = null;
 
-  const container = document.getElementById('inventory-list');
-  if (!container) return;
-  container.innerHTML = '';
+function collectInventorySlots(state, onSell, onSellProduct, onSelectSeed) {
   const bonus = effectiveSaleBonus(state);
+  const slots = [];
 
   for (const type in state.harvested) {
     const count = state.harvested[type];
     const seedCount = state.seeds[type];
     const sellPrice = Math.round(state.seedConfigs[type].sell * (1 + bonus));
     const isActive = type === state.activeSeedType;
-    container.appendChild(renderInvRow({
+    slots.push({
+      key: `crop:${type}`,
       title: type,
+      qty: count + seedCount,
       meta: `Colhidos: ${count} | Sementes: ${seedCount}`,
+      mark: type.slice(0, 2).toUpperCase(),
       actions: [
         {
           className: 'use-btn',
@@ -241,71 +240,155 @@ export function updateInventoryUI(state, onSell, onSellProduct, onSelectSeed) {
           onClick: () => onSell(type)
         }
       ]
-    }));
+    });
   }
 
-  container.appendChild(renderInvRow({
+  slots.push({
+    key: 'feed',
     title: 'Ração',
-    meta: `Em estoque: ${state.feed || 0} — botão Ração + E no animal`
-  }));
+    qty: state.feed || 0,
+    meta: `Em estoque: ${state.feed || 0} — botão Ração + E no animal`,
+    mark: 'RA',
+    actions: []
+  });
 
-  if (!onSellProduct) {
-    updateCraftLabels(state);
-    return;
-  }
-  for (const type in state.products) {
-    const count = state.products[type];
-    const animalType = Object.keys(state.animalConfigs).find(a => state.animalConfigs[a].product === type);
-    const basePrice = animalType
-      ? Math.round(state.animalConfigs[animalType].sell * (1 + bonus))
-      : (type === YARN_GIFT_RECIPE.productKey ? 40 : 10);
-
-    container.appendChild(renderInvRow({
-      title: type,
-      meta: `Em estoque: ${count}`,
-      actions: [{
-        label: `Vender (R$ ${basePrice})`,
-        disabled: count === 0,
-        onClick: () => onSellProduct(type)
-      }]
-    }));
-  }
-
-  if (state.materials) {
-    for (const type of Object.keys(state.materials)) {
-      const count = state.materials[type] || 0;
-      const base = type === 'Minerio' ? 12 : type === 'Carvao' ? 8 : 4;
-      const price = Math.round(base * (1 + bonus));
-      container.appendChild(renderInvRow({
+  if (onSellProduct) {
+    for (const type in state.products) {
+      const count = state.products[type];
+      const animalType = Object.keys(state.animalConfigs).find(a => state.animalConfigs[a].product === type);
+      const basePrice = animalType
+        ? Math.round(state.animalConfigs[animalType].sell * (1 + bonus))
+        : (type === YARN_GIFT_RECIPE.productKey ? 40 : 10);
+      slots.push({
+        key: `prod:${type}`,
         title: type,
-        meta: `Material: ${count}`,
+        qty: count,
+        meta: `Em estoque: ${count}`,
+        mark: type.slice(0, 2).toUpperCase(),
         actions: [{
-          label: `Vender (R$ ${price})`,
+          label: `Vender (R$ ${basePrice})`,
           disabled: count === 0,
           onClick: () => onSellProduct(type)
         }]
-      }));
+      });
+    }
+
+    if (state.materials) {
+      for (const type of Object.keys(state.materials)) {
+        const count = state.materials[type] || 0;
+        const base = type === 'Minerio' ? 12 : type === 'Carvao' ? 8 : 4;
+        const price = Math.round(base * (1 + bonus));
+        slots.push({
+          key: `mat:${type}`,
+          title: type,
+          qty: count,
+          meta: `Material: ${count}`,
+          mark: type.slice(0, 2).toUpperCase(),
+          actions: [{
+            label: `Vender (R$ ${price})`,
+            disabled: count === 0,
+            onClick: () => onSellProduct(type)
+          }]
+        });
+      }
     }
   }
 
   if (Array.isArray(state.weaponsOwned) && state.weaponsOwned.length) {
     state.weaponsOwned.forEach(id => {
       const equipped = state.equippedWeapon === id;
-      container.appendChild(renderInvRow({
-        title: getWeaponDef(id).name,
-        meta: equipped ? 'Equipada' : 'Coletada — role o mouse para trocar'
-      }));
+      const def = getWeaponDef(id);
+      slots.push({
+        key: `wep:${id}`,
+        title: def.name,
+        qty: 1,
+        meta: equipped ? 'Equipada' : 'Coletada — role o mouse para trocar',
+        mark: def.name.slice(0, 2).toUpperCase(),
+        actions: []
+      });
     });
   }
 
+  return slots;
+}
+
+function renderInvDetail(slot) {
+  const nameEl = document.getElementById('inv-detail-name');
+  const metaEl = document.getElementById('inv-detail-meta');
+  const actionsEl = document.getElementById('inv-detail-actions');
+  if (!nameEl || !metaEl || !actionsEl) return;
+  if (!slot) {
+    nameEl.textContent = '—';
+    metaEl.textContent = 'Selecione um item';
+    actionsEl.innerHTML = '';
+    return;
+  }
+  nameEl.textContent = slot.title;
+  metaEl.textContent = slot.meta;
+  actionsEl.innerHTML = '';
+  for (const action of slot.actions || []) {
+    const btn = document.createElement('button');
+    if (action.className) btn.className = action.className;
+    btn.textContent = action.label;
+    if (action.disabled) btn.disabled = true;
+    if (action.onClick) btn.addEventListener('click', action.onClick);
+    actionsEl.appendChild(btn);
+  }
+}
+
+export function updateInventoryUI(state, onSell, onSellProduct, onSelectSeed) {
+  document.querySelectorAll('.seed-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.seed === state.activeSeedType);
+    const type = btn.dataset.seed;
+    if (type && state.seedConfigs[type]) {
+      const priceSpan = btn.querySelector('span:last-child');
+      if (priceSpan) priceSpan.textContent = `R$ ${seedCostFor(state, type)}`;
+    }
+  });
+
+  const grid = document.getElementById('inventory-grid') || document.getElementById('inventory-list');
+  if (!grid) return;
+  const slots = collectInventorySlots(state, onSell, onSellProduct, onSelectSeed);
+  if (!slots.some(s => s.key === selectedInvKey)) selectedInvKey = slots[0]?.key || null;
+  grid.innerHTML = '';
+  grid.classList.add('inventory-grid');
+
+  for (const slot of slots) {
+    const cell = document.createElement('button');
+    cell.type = 'button';
+    cell.className = 'inv-slot';
+    if (slot.key === selectedInvKey) cell.classList.add('selected');
+    cell.innerHTML = `<span class="inv-slot-mark">${slot.mark}</span><span class="inv-slot-qty">${slot.qty}</span>`;
+    cell.addEventListener('click', () => {
+      selectedInvKey = slot.key;
+      updateInventoryUI(state, onSell, onSellProduct, onSelectSeed);
+    });
+    grid.appendChild(cell);
+  }
+
+  renderInvDetail(slots.find(s => s.key === selectedInvKey) || null);
   updateCraftLabels(state);
 }
 
+let minimapCanvasCache = null;
+let minimapCtxCache = null;
+let minimapLastKey = null;
+
 /** Minimapa 2D — planta da área ativa com marcadores. */
 export function updateMinimap(playerPos, markers, bounds, areaLabel) {
-  const canvas = document.getElementById('minimap');
-  if (!canvas || !playerPos || !bounds) return;
-  const ctx = canvas.getContext('2d');
+  if (!playerPos || !bounds) return;
+  if (!minimapCanvasCache || !minimapCanvasCache.isConnected) {
+    minimapCanvasCache = document.getElementById('minimap');
+    minimapCtxCache = minimapCanvasCache ? minimapCanvasCache.getContext('2d') : null;
+  }
+  const canvas = minimapCanvasCache;
+  const ctx = minimapCtxCache;
+  if (!canvas || !ctx) return;
+
+  const key = `${Math.round(playerPos.x * 10)},${Math.round(playerPos.z * 10)},${areaLabel}`;
+  if (key === minimapLastKey) return;
+  minimapLastKey = key;
+
   const w = canvas.width;
   const h = canvas.height;
   const pad = 6;
@@ -355,9 +438,19 @@ export function updateMinimap(playerPos, markers, bounds, areaLabel) {
   ctx.fill();
 }
 
+let areaBadgeCache = null;
+let areaBadgeLastLabel = null;
+
 export function updateAreaBadge(label) {
-  const el = document.getElementById('area-badge');
-  if (el) el.textContent = label || 'Fazenda';
+  if (!areaBadgeCache || !areaBadgeCache.isConnected) {
+    areaBadgeCache = document.getElementById('area-badge');
+  }
+  const el = areaBadgeCache;
+  if (!el) return;
+  const text = label || 'Fazenda';
+  if (text === areaBadgeLastLabel) return;
+  areaBadgeLastLabel = text;
+  el.textContent = text;
 }
 
 export function updateUpgradesUI(state) {

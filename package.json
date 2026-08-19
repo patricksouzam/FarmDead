@@ -14,7 +14,8 @@
   },
   "devDependencies": {
     "electron": "^32.3.3",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "playwright-core": "^1.62.1"
   },
   "build": {
     "appId": "com.fazenda3d.app",
@@ -29,11 +30,15 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },

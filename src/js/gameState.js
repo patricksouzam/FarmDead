@@ -142,6 +142,7 @@ export const PLAYER_RESPAWN_ENERGY_PENALTY = 20;
 export const PLAYER_RESPAWN_MONEY_PENALTY_PCT = 0.05;
 export const PLAYER_RESPAWN_MONEY_PENALTY_CAP = 60;
 export const PLAYER_DAMAGE_INVULN_MS = 500;
+export const PLAYER_RESPAWN_INVULN_MS = 2200;
 
 export const ENEMY_CONTACT_DAMAGE = { Zumbi: 10, ZumbiCorredor: 8, ZumbiBruto: 16, ZumbiRastejante: 12 };
 export const ENEMY_CONTACT_COOLDOWN_MS = 1000;

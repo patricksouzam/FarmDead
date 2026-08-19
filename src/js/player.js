@@ -19,6 +19,10 @@ export const PLAYER_GRAVITY = 22;
 export const PLAYER_EYE_HEIGHT = 1.58;
 export const LOOK_SENSITIVITY = 0.00245;
 export const LOOK_SMOOTH = 48;
+export const FLASHLIGHT_SPOT_INTENSITY = 5.6;
+export const FLASHLIGHT_FILL_INTENSITY = 0.55;
+export const FEAR_SWAY_ROLL = 0.028;
+export const FEAR_SWAY_PITCH = 0.01;
 
 export function createPlayer(scene, spawn = getPlayerSpawn()) {
   const mesh = buildLowPolyHumanoid({
@@ -57,6 +61,13 @@ export function createPlayer(scene, spawn = getPlayerSpawn()) {
     lastDamageTime: 0,
     pointerLocked: false,
     flashlight: null,
+    flashFill: null,
+    flashlightOn: false,
+    noisePulse: 0,
+    noiseRadius: 0,
+    fearLevel: 0,
+    targetFear: 0,
+    controlsLocked: false,
     viewmodel: null,
     crouched: false,
     aiming: false,
@@ -99,6 +110,21 @@ export function attachFirstPerson(scene, camera, player) {
 
   player.flashlight = flashlight;
   player.flashFill = fill;
+  player.flashlightOn = false;
+  applyFlashlightState(player);
+}
+
+export function applyFlashlightState(player) {
+  const on = !!player.flashlightOn;
+  if (player.flashlight) player.flashlight.intensity = on ? FLASHLIGHT_SPOT_INTENSITY : 0;
+  if (player.flashFill) player.flashFill.intensity = on ? FLASHLIGHT_FILL_INTENSITY : 0;
+}
+
+export function toggleFlashlight(player) {
+  if (!player) return false;
+  player.flashlightOn = !player.flashlightOn;
+  applyFlashlightState(player);
+  return player.flashlightOn;
 }
 
 export function bindPlayerInput(player, canvas) {
@@ -124,6 +150,7 @@ export function bindPlayerInput(player, canvas) {
   document.addEventListener('pointerlockchange', onLockChange);
 
   window.addEventListener('mousemove', (e) => {
+    if (player.controlsLocked) return;
     if (document.pointerLockElement !== canvas) return;
     player.lookYaw -= (e.movementX || 0) * LOOK_SENSITIVITY;
     player.lookPitch = THREE.MathUtils.clamp(
@@ -319,12 +346,17 @@ export function updateFollowCamera(camera, player, controls, delta = 1 / 60) {
   const bobSpeed = player.stepPhase || player.animTime * 8;
   player.headBob = moving ? Math.sin(bobSpeed * 2) * bobAmp : THREE.MathUtils.damp(player.headBob || 0, 0, 10, delta);
   const land = player.landDip || 0;
+  player.fearLevel = THREE.MathUtils.damp(player.fearLevel || 0, player.targetFear || 0, 4.2, delta);
+  const fear = player.fearLevel || 0;
+  const t = player.animTime || 0;
+  const fearRoll = Math.sin(t * 2.35) * fear * FEAR_SWAY_ROLL;
+  const fearPitch = Math.sin(t * 1.15 + 0.6) * fear * FEAR_SWAY_PITCH;
 
   camera.position.set(px, py + (player.eyeHeight || PLAYER_EYE_HEIGHT) + (player.headBob || 0) - land, pz);
   camera.rotation.order = 'YXZ';
   camera.rotation.y = player.cameraYaw;
-  camera.rotation.x = player.cameraPitch + (moving && !aiming ? Math.sin(bobSpeed) * bobAmp * 0.35 : 0);
-  camera.rotation.z = aiming ? 0.008 : (player.crouched ? 0.018 : (moving ? Math.sin(bobSpeed) * bobAmp * 0.4 : 0));
+  camera.rotation.x = player.cameraPitch + (moving && !aiming ? Math.sin(bobSpeed) * bobAmp * 0.35 : 0) + fearPitch;
+  camera.rotation.z = aiming ? 0.008 : (player.crouched ? 0.018 : (moving ? Math.sin(bobSpeed) * bobAmp * 0.4 : 0)) + fearRoll;
   const targetFov = player.aiming ? 54 : (player.sprintFactor > 0.5 ? 78 : 75);
   player.fov = THREE.MathUtils.damp(player.fov || 75, targetFov, 10, delta);
   if (Math.abs(camera.fov - player.fov) > 0.05) {
