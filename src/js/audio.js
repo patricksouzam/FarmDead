@@ -40,6 +40,7 @@ const SFX_PRESETS = {
   error: { freqStart: 240, freqEnd: 140, duration: 0.18, type: 'square' },
   notification: { freqStart: 700, freqEnd: 700, duration: 0.1, type: 'sine' },
   click: { freqStart: 500, freqEnd: 500, duration: 0.06, type: 'sine' },
+  flashlight_click: { freqStart: 180, freqEnd: 90, duration: 0.08, type: 'square' },
   bell: { freqStart: 920, freqEnd: 620, duration: 0.35, type: 'sine', hits: 3, hitGap: 0.22 }
 };
 
@@ -47,7 +48,8 @@ export function playSfx(name, opts = {}) {
   if (!audioCtx) return;
   if (name === 'zombie_idle' || name === 'zombie_agro' || name === 'zombie_attack'
     || name === 'zombie_hurt' || name === 'zombie_die' || name === 'melee_swing'
-    || name === 'gunshot' || name === 'flesh_hit' || name === 'reload') {
+    || name === 'gunshot' || name === 'flesh_hit' || name === 'reload'
+    || name === 'heartbeat' || name === 'alert_stinger' || name === 'player_die') {
     playComplexSfx(name, opts);
     return;
   }
@@ -88,6 +90,48 @@ function noiseBuffer(duration) {
 function playComplexSfx(name, opts) {
   const now = audioCtx.currentTime;
   const volMul = opts.volume ?? 1;
+
+  if (name === 'heartbeat') {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(52 + (opts.pitch || 0) * 18, now);
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.22 * volMul, now + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+    osc.connect(gain);
+    gain.connect(sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.18);
+    const osc2 = audioCtx.createOscillator();
+    const g2 = audioCtx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(46 + (opts.pitch || 0) * 14, now + 0.14);
+    g2.gain.setValueAtTime(0.001, now + 0.14);
+    g2.gain.linearRampToValueAtTime(0.16 * volMul, now + 0.16);
+    g2.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+    osc2.connect(g2);
+    g2.connect(sfxGain);
+    osc2.start(now + 0.14);
+    osc2.stop(now + 0.32);
+    return;
+  }
+
+  if (name === 'alert_stinger') {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(620, now);
+    osc.frequency.exponentialRampToValueAtTime(180, now + 0.22);
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.2 * volMul, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    osc.connect(gain);
+    gain.connect(sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.3);
+    return;
+  }
 
   if (name === 'reload') {
     const osc = audioCtx.createOscillator();
@@ -142,6 +186,38 @@ function playComplexSfx(name, opts) {
     gain.connect(sfxGain);
     src.start(now);
     src.stop(now + 0.2);
+    return;
+  }
+
+  if (name === 'player_die') {
+    const src = audioCtx.createBufferSource();
+    src.buffer = noiseBuffer(0.9);
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(420, now);
+    filter.frequency.exponentialRampToValueAtTime(70, now + 0.85);
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.001, now);
+    ng.gain.linearRampToValueAtTime(0.38 * volMul, now + 0.04);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.9);
+    src.connect(filter);
+    filter.connect(ng);
+    ng.connect(sfxGain);
+    src.start(now);
+    src.stop(now + 0.95);
+
+    const osc = audioCtx.createOscillator();
+    const og = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(96, now);
+    osc.frequency.exponentialRampToValueAtTime(28, now + 0.8);
+    og.gain.setValueAtTime(0.001, now);
+    og.gain.linearRampToValueAtTime(0.22 * volMul, now + 0.05);
+    og.gain.exponentialRampToValueAtTime(0.001, now + 0.85);
+    osc.connect(og);
+    og.connect(sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.9);
     return;
   }
 
@@ -220,4 +296,18 @@ export function playMusicTrack(url) {
 
 export function stopMusic() {
   if (musicEl) musicEl.pause();
+}
+
+let heartbeatWait = 0;
+
+export function updateHeartbeat(awareness, delta) {
+  if (!audioCtx || awareness < 0.18) {
+    heartbeatWait = 0;
+    return;
+  }
+  const interval = 1.12 - awareness * 0.62;
+  heartbeatWait -= delta;
+  if (heartbeatWait > 0) return;
+  heartbeatWait = Math.max(0.38, interval);
+  playSfx('heartbeat', { volume: 0.35 + awareness * 0.7, pitch: awareness });
 }

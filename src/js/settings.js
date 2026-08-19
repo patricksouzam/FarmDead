@@ -4,7 +4,7 @@ const STORAGE_KEY = 'farmcool_settings';
 
 export const DEFAULT_SETTINGS = {
   audio: { musicVolume: 0.6, sfxVolume: 0.8, muted: false },
-  graphics: { quality: 'high', shadows: true, bloom: true, pixelRatioCap: 2, renderScale: 1.0 }
+  graphics: { quality: 'high', shadows: true, bloom: false, ps2Filter: true, pixelRatioCap: 2, renderScale: 1.0 }
 };
 
 function mergeSection(defaults, saved) {
@@ -38,7 +38,7 @@ export function resetSettings() {
 export const QUALITY_PRESETS = {
   low: { shadows: false, bloom: false, pixelRatioCap: 1, renderScale: 0.75 },
   medium: { shadows: true, bloom: false, pixelRatioCap: 1.5, renderScale: 0.9 },
-  high: { shadows: true, bloom: true, pixelRatioCap: 2, renderScale: 1.0 }
+  high: { shadows: true, bloom: false, pixelRatioCap: 2, renderScale: 1.0 }
 };
 
 export function applyQualityPreset(graphics, quality) {

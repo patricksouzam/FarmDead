@@ -31,11 +31,12 @@ export function voxelStairRoof(group, {
   depth,
   baseY,
   color,
+  map,
   layers = 3,
   stepH = 0.28,
   overhang = 0.2
 } = {}) {
-  const roofMat = voxelMat(color, { roughness: 0.7 });
+  const roofMat = voxelMat(color, { roughness: 0.7, ...(map ? { map } : {}) });
   const totalW = width + overhang * 2;
   const totalD = depth + overhang * 2;
   for (let i = 0; i < layers; i++) {

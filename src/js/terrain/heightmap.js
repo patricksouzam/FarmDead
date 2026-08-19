@@ -113,6 +113,12 @@ export function getColumnProfile(x, z, seed, areaId, lakePosition) {
  * área inteira, dado seus bounds inteiros. Usado para lookup O(1) em
  * getGroundHeightAt sem percorrer o chunkGrid a cada chamada.
  */
+const HEIGHT_CACHE_KEY_OFFSET = 100000;
+
+function heightCacheKey(x, z) {
+  return (x + HEIGHT_CACHE_KEY_OFFSET) * 1000000 + (z + HEIGHT_CACHE_KEY_OFFSET);
+}
+
 export function buildHeightCache(bounds, seed, areaId, lakePosition) {
   const cache = new Map();
   const minX = Math.floor(bounds.minX);
@@ -122,7 +128,7 @@ export function buildHeightCache(bounds, seed, areaId, lakePosition) {
   for (let x = minX; x <= maxX; x++) {
     for (let z = minZ; z <= maxZ; z++) {
       const { height, water } = getColumnProfile(x, z, seed, areaId, lakePosition);
-      cache.set(`${x},${z}`, { height, water });
+      cache.set(heightCacheKey(x, z), { height, water });
     }
   }
   return cache;
@@ -142,7 +148,7 @@ export function registerHeightCache(areaId, cache) {
 export function getGroundHeightAt(x, z, areaId = 'farm') {
   const cache = heightCacheByArea.get(areaId);
   if (!cache) return FARM_BASE_HEIGHT + 1;
-  const key = `${Math.round(x)},${Math.round(z)}`;
+  const key = heightCacheKey(Math.round(x), Math.round(z));
   const entry = cache.get(key);
   if (!entry) return FARM_BASE_HEIGHT + 1;
   return entry.height + 1;

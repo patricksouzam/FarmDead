@@ -3,6 +3,10 @@ import { voxelBox, voxelMat } from './voxel.js';
 import { buildLowPolyHumanoid, animateCrawlHumanoid } from './characters.js';
 import { avoidObstacles, getGroundHeightAt } from './world.js';
 import {
+  evaluateDetection, applyAwareness, alertTier,
+  CHASE_MEMORY, INVESTIGATE_DURATION
+} from './stealth.js';
+import {
   ENEMY_CONTACT_DAMAGE, ENEMY_CONTACT_COOLDOWN_MS, ENEMY_AGGRO_RANGE, ENEMY_DEAGGRO_RANGE
 } from './gameState.js';
 import {
@@ -153,6 +157,69 @@ function createHpBarSprite(type, meshScale = 1) {
   return sprite;
 }
 
+function createAlertSprite(type, meshScale = 1) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 32;
+  canvas.height = 32;
+  const ctx = canvas.getContext('2d');
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    transparent: true,
+    depthTest: false,
+    sizeAttenuation: true
+  });
+  const sprite = new THREE.Sprite(mat);
+  const inv = 1 / Math.max(0.01, meshScale);
+  sprite.scale.set(0.55 * inv, 0.55 * inv, 1);
+  sprite.position.set(0, type === 'ZumbiRastejante' ? 1.05 : 2.45, 0);
+  sprite.visible = false;
+  sprite.userData.canvas = canvas;
+  sprite.userData.ctx = ctx;
+  sprite.userData.tex = tex;
+  sprite.userData.mark = '';
+  return sprite;
+}
+
+function paintAlertMark(sprite, mark) {
+  if (!sprite || sprite.userData.mark === mark) return;
+  sprite.userData.mark = mark;
+  const ctx = sprite.userData.ctx;
+  ctx.clearRect(0, 0, 32, 32);
+  if (!mark) {
+    sprite.userData.tex.needsUpdate = true;
+    return;
+  }
+  ctx.fillStyle = mark === '!' ? '#d02020' : '#e0b020';
+  ctx.beginPath();
+  ctx.arc(16, 16, 14, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#140808';
+  ctx.font = 'bold 22px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(mark, 16, 18);
+  sprite.userData.tex.needsUpdate = true;
+}
+
+export function refreshEnemyAlert(enemy) {
+  const sprite = enemy.alertSprite;
+  if (!sprite) return;
+  if (enemy.state === 'dead') {
+    sprite.visible = false;
+    return;
+  }
+  const tier = alertTier(enemy);
+  if (tier === 'none') {
+    sprite.visible = false;
+    return;
+  }
+  sprite.visible = true;
+  paintAlertMark(sprite, tier === 'bang' ? '!' : '?');
+}
+
 export function refreshEnemyHpBar(enemy, { show = false } = {}) {
   const bar = enemy.hpBar;
   if (!bar) return;
@@ -189,6 +256,8 @@ export function spawnEnemy(scene, type, position, areaId, opts = {}) {
   const stats = ENEMY_STATS[type] || ENEMY_STATS.Zumbi;
   const hpBar = createHpBarSprite(type, mesh.scale.x || 1);
   mesh.add(hpBar);
+  const alertSprite = createAlertSprite(type, mesh.scale.x || 1);
+  mesh.add(alertSprite);
   const assignedId = opts.id != null ? opts.id : nextEnemyId++;
   if (opts.id != null) nextEnemyId = Math.max(nextEnemyId, opts.id + 1);
   const enemy = {
@@ -213,10 +282,17 @@ export function spawnEnemy(scene, type, position, areaId, opts = {}) {
     deaggroRange: (ENEMY_AGGRO_MULT[type] ?? 1) * ENEMY_DEAGGRO_RANGE,
     hpBar,
     hpBarTimer: 0,
+    alertSprite,
+    awareness: 0,
+    lastKnown: null,
+    loseTimer: 0,
+    investigateTime: 0,
+    prevAlertTier: 'none',
     hitbox: hitboxForEnemyType(type)
   };
   mesh.userData.enemyRef = enemy;
   refreshEnemyHpBar(enemy);
+  refreshEnemyAlert(enemy);
   return enemy;
 }
 
@@ -234,16 +310,35 @@ function normalizeAiTargets(targetsOrPos, opts = {}) {
 function pickAiTarget(enemy, targets, safeZone) {
   const mesh = enemy.mesh;
   let best = null;
-  let bestDist = Infinity;
+  let bestDistSq = Infinity;
   for (const target of targets) {
-    const dist = Math.hypot(target.pos.x - mesh.position.x, target.pos.z - mesh.position.z);
+    const dx = target.pos.x - mesh.position.x;
+    const dz = target.pos.z - mesh.position.z;
+    const distSq = dx * dx + dz * dz;
     if (inSafeZone(target.pos, safeZone)) continue;
-    if (dist < bestDist) {
-      bestDist = dist;
+    if (distSq < bestDistSq) {
+      bestDistSq = distSq;
       best = target;
     }
   }
-  return { target: best, dist: bestDist };
+  return { target: best, dist: Number.isFinite(bestDistSq) ? Math.sqrt(bestDistSq) : Infinity };
+}
+
+function walkToward(enemy, x, z, speedMul, delta, areaId) {
+  const mesh = enemy.mesh;
+  const dx = x - mesh.position.x;
+  const dz = z - mesh.position.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 0.28) return dist;
+  const step = Math.min(dist, enemy.speed * speedMul * delta);
+  const nextX = mesh.position.x + (dx / dist) * step;
+  const nextZ = mesh.position.z + (dz / dist) * step;
+  const resolved = avoidObstacles(nextX, nextZ, 0.4, areaId);
+  mesh.position.x = resolved.x;
+  mesh.position.z = resolved.z;
+  mesh.position.y = getGroundHeightAt(resolved.x, resolved.z, areaId);
+  mesh.rotation.y = Math.atan2(dx, dz);
+  return dist;
 }
 
 export function updateEnemyAI(enemy, delta, targetsOrPos, areaId, safeZone, opts = {}) {
@@ -257,23 +352,39 @@ export function updateEnemyAI(enemy, delta, targetsOrPos, areaId, safeZone, opts
   const picked = pickAiTarget(enemy, targets, safeZone);
   const target = picked.target;
   const playerPos = target?.pos || { x: enemy.homeX, z: enemy.homeZ };
-  const distToPlayer = target ? picked.dist : Infinity;
   const playerSafe = !target;
   const crouched = !!(target?.crouched ?? opts.crouched);
-  const baseAggro = enemy.aggroRange ?? ENEMY_AGGRO_RANGE;
-  const baseDeaggro = enemy.deaggroRange ?? ENEMY_DEAGGRO_RANGE;
-  const aggro = (crouched ? baseAggro * 0.62 : baseAggro);
-  const deaggro = crouched ? baseDeaggro * 0.85 : baseDeaggro;
   enemy.aggroPlayerId = target?.playerId ?? 0;
 
-  if (enemy.state === 'patrolling' || enemy.state === 'chasing') {
-    if (distToPlayer < aggro && !playerSafe) {
-      enemy.state = 'chasing';
-    } else if (enemy.state === 'chasing' && (distToPlayer > deaggro || playerSafe)) {
-      enemy.state = 'patrolling';
+  const sense = playerSafe
+    ? { seen: false, heard: false, dist: Infinity }
+    : evaluateDetection(enemy, target, areaId);
+  applyAwareness(enemy, sense, delta);
+
+  if (sense.seen || sense.heard) {
+    enemy.lastKnown = { x: playerPos.x, z: playerPos.z };
+  }
+
+  if (sense.seen && !playerSafe) {
+    enemy.loseTimer = CHASE_MEMORY;
+    if (enemy.state !== 'attacking') enemy.state = 'chasing';
+  } else if (enemy.state === 'chasing' || enemy.state === 'attacking') {
+    enemy.loseTimer = Math.max(0, (enemy.loseTimer || 0) - delta);
+    if (enemy.state === 'chasing' && enemy.loseTimer <= 0) {
+      enemy.state = 'investigating';
+      enemy.investigateTime = INVESTIGATE_DURATION;
       enemy.wanderTarget = null;
     }
+  } else if (sense.heard && enemy.state === 'patrolling') {
+    enemy.state = 'investigating';
+    enemy.investigateTime = INVESTIGATE_DURATION;
+    enemy.wanderTarget = null;
   }
+
+  const tier = alertTier(enemy);
+  if (enemy.prevAlertTier !== 'bang' && tier === 'bang') enemy.justAlerted = true;
+  enemy.prevAlertTier = tier;
+  refreshEnemyAlert(enemy);
 
   if (enemy.state === 'patrolling') {
     if (enemy.wanderPause > 0) {
@@ -283,26 +394,30 @@ export function updateEnemyAI(enemy, delta, targetsOrPos, areaId, safeZone, opts
     if (!enemy.wanderTarget) {
       const angle = Math.random() * Math.PI * 2;
       const dist = 3 + Math.random() * 4;
-      const target = { x: enemy.homeX + Math.cos(angle) * dist, z: enemy.homeZ + Math.sin(angle) * dist };
-      const clear = avoidObstacles(target.x, target.z, 0.4, areaId);
-      enemy.wanderTarget = clear;
+      const wander = { x: enemy.homeX + Math.cos(angle) * dist, z: enemy.homeZ + Math.sin(angle) * dist };
+      enemy.wanderTarget = avoidObstacles(wander.x, wander.z, 0.4, areaId);
     }
-    const dx = enemy.wanderTarget.x - mesh.position.x;
-    const dz = enemy.wanderTarget.z - mesh.position.z;
-    const dist = Math.hypot(dx, dz);
+    const dist = walkToward(enemy, enemy.wanderTarget.x, enemy.wanderTarget.z, 0.4, delta, areaId);
     if (dist < 0.3) {
       enemy.wanderTarget = null;
       enemy.wanderPause = 1.5 + Math.random() * 2.5;
-      return null;
     }
-    const step = Math.min(dist, enemy.speed * 0.4 * delta);
-    const nextX = mesh.position.x + (dx / dist) * step;
-    const nextZ = mesh.position.z + (dz / dist) * step;
-    const resolved = avoidObstacles(nextX, nextZ, 0.4, areaId);
-    mesh.position.x = resolved.x;
-    mesh.position.z = resolved.z;
-    mesh.position.y = getGroundHeightAt(resolved.x, resolved.z, areaId);
-    mesh.rotation.y = Math.atan2(dx, dz);
+    return null;
+  }
+
+  if (enemy.state === 'investigating') {
+    if (sense.heard) enemy.investigateTime = INVESTIGATE_DURATION;
+    else enemy.investigateTime = Math.max(0, (enemy.investigateTime || 0) - delta);
+    const goal = enemy.lastKnown || { x: enemy.homeX, z: enemy.homeZ };
+    const dist = walkToward(enemy, goal.x, goal.z, 0.55, delta, areaId);
+    if (dist < 0.45) {
+      mesh.rotation.y += delta * 1.4;
+      if (enemy.investigateTime <= 0) {
+        enemy.state = 'patrolling';
+        enemy.wanderTarget = null;
+        enemy.lastKnown = null;
+      }
+    }
     return null;
   }
 
@@ -313,17 +428,8 @@ export function updateEnemyAI(enemy, delta, targetsOrPos, areaId, safeZone, opts
       enemy.state = 'attacking';
       return null;
     }
-    const dx = playerPos.x - mesh.position.x;
-    const dz = playerPos.z - mesh.position.z;
-    const dist = Math.hypot(dx, dz) || 1;
-    const step = enemy.speed * delta;
-    const nextX = mesh.position.x + (dx / dist) * step;
-    const nextZ = mesh.position.z + (dz / dist) * step;
-    const resolved = avoidObstacles(nextX, nextZ, 0.4, areaId);
-    mesh.position.x = resolved.x;
-    mesh.position.z = resolved.z;
-    mesh.position.y = getGroundHeightAt(resolved.x, resolved.z, areaId);
-    mesh.rotation.y = Math.atan2(dx, dz);
+    const chasePos = sense.seen ? playerPos : (enemy.lastKnown || playerPos);
+    walkToward(enemy, chasePos.x, chasePos.z, 1, delta, areaId);
     return null;
   }
 
@@ -336,6 +442,7 @@ export function updateEnemyAI(enemy, delta, targetsOrPos, areaId, safeZone, opts
     const leaveCap = expandCapsule(pCap, 0.35);
     if (!capsulesOverlap(eCap, leaveCap)) {
       enemy.state = 'chasing';
+      enemy.loseTimer = CHASE_MEMORY;
       return null;
     }
     const now = Date.now();
@@ -355,11 +462,13 @@ export function poseEnemyCorpse(enemy) {
   enemy.mesh.rotation.z = side * Math.PI / 2;
   enemy.mesh.rotation.x = (Math.random() - 0.5) * 0.25;
   refreshEnemyHpBar(enemy);
+  refreshEnemyAlert(enemy);
 }
 
 export function animateEnemy(enemy, delta) {
   if (enemy.hpBarTimer > 0) enemy.hpBarTimer = Math.max(0, enemy.hpBarTimer - delta);
   refreshEnemyHpBar(enemy);
+  refreshEnemyAlert(enemy);
   if (enemy.state === 'dead') return;
   enemy.animTime += delta;
   const t = enemy.animTime;
@@ -367,7 +476,8 @@ export function animateEnemy(enemy, delta) {
   if (!rig) return;
 
   const chasing = enemy.state === 'chasing' || enemy.state === 'attacking';
-  const moving = chasing || (enemy.state === 'patrolling' && enemy.wanderTarget);
+  const investigating = enemy.state === 'investigating';
+  const moving = chasing || investigating || (enemy.state === 'patrolling' && enemy.wanderTarget);
 
   if (enemy.type === 'ZumbiRastejante') {
     animateCrawlHumanoid(enemy.mesh, t, moving);
@@ -414,6 +524,10 @@ export function damageEnemy(enemy, amount) {
   if (enemy.state === 'dead') return false;
   enemy.hp -= amount;
   refreshEnemyHpBar(enemy, { show: true });
+  enemy.awareness = 1;
+  enemy.loseTimer = CHASE_MEMORY;
+  if (enemy.state !== 'dead' && enemy.state !== 'attacking') enemy.state = 'chasing';
+  refreshEnemyAlert(enemy);
   if (enemy.hp <= 0) {
     enemy.hp = 0;
     enemy.state = 'dead';
@@ -429,6 +543,12 @@ export function removeEnemy(scene, enemies, enemy) {
     enemy.hpBar.material?.dispose?.();
     if (enemy.hpBar.parent) enemy.hpBar.parent.remove(enemy.hpBar);
     enemy.hpBar = null;
+  }
+  if (enemy.alertSprite) {
+    enemy.alertSprite.userData.tex?.dispose?.();
+    enemy.alertSprite.material?.dispose?.();
+    if (enemy.alertSprite.parent) enemy.alertSprite.parent.remove(enemy.alertSprite);
+    enemy.alertSprite = null;
   }
   if (enemy.mesh?.parent) enemy.mesh.parent.remove(enemy.mesh);
   else if (scene) scene.remove(enemy.mesh);
@@ -454,6 +574,7 @@ export function syncEnemiesFromSnapshot(root, enemies, snaps, areaId) {
     if (snap.state === 'dead' && enemy.state !== 'dead') poseEnemyCorpse(enemy);
     else if (snap.state && snap.state !== 'dead') enemy.state = snap.state;
     refreshEnemyHpBar(enemy, { show: enemy.state === 'chasing' || enemy.state === 'attacking' });
+    refreshEnemyAlert(enemy);
   }
   for (let i = enemies.length - 1; i >= 0; i--) {
     if (!seen.has(enemies[i].id)) removeEnemy(root, enemies, enemies[i]);

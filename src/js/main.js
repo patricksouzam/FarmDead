@@ -4,6 +4,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { createPs1Pass, updatePs1PassSize, setPs1VertexSnap } from './ps1Filter.js';
 
 import {
   createScene, createSky, createGround, createFences,
@@ -43,14 +44,14 @@ import {
   ENEMY_MAX_ACTIVE, ENEMY_SPAWN_CHECK_INTERVAL_MS, ENEMY_SAFE_ZONE_RADIUS,
   ENEMY_SPAWN_MIN_DIST_FROM_PLAYER, ENEMY_SPAWN_MAX_DIST_FROM_PLAYER,
   PLAYER_DAMAGE_INVULN_MS, PLAYER_RESPAWN_ENERGY_PENALTY, PLAYER_RESPAWN_MONEY_PENALTY_PCT,
-  PLAYER_RESPAWN_MONEY_PENALTY_CAP,
+  PLAYER_RESPAWN_MONEY_PENALTY_CAP, PLAYER_RESPAWN_INVULN_MS,
   seedCostFor, govAuthCostFor, orderRewardFor, effectiveSaleBonus
 } from './gameState.js';
 import {
   updateHUD, updateInventoryUI, updateUpgradesUI, showNotification, setActiveTool, updateGoalsUI,
   updateNetHud, setDuskWarning, showDialogue, hideDialogue, showChapterIntro, showConfirmDialog, updateWeaponHUD,
   openModal, closeModal, toggleModal, closeTopModal, isAnyGameModalOpen, isModalOpen,
-  closeAllModalsExcept, bindModalCloses, bindUiClicks, renderInvRow
+  closeAllModalsExcept, bindModalCloses, bindUiClicks, renderInvRow, updateStealthHUD
 } from './ui.js';
 import {
   seasonForDay, dayOfSeasonFor, growthMultiplierForSeason, skyPaletteForSeason,
@@ -61,10 +62,10 @@ import {
   generateSpecialOrder, generateSupplierOrder, fulfillOrder, farmerLine, govAuthorizationOffer,
   randomGovAuthorizedLine, checkFriendshipMilestones, friendshipRewardHint
 } from './npcs.js';
-import { svgIcon } from '../icons/icons.js';
 import { APP_STATE } from './appFlow.js';
 import { loadSettings, saveSettings, applyQualityPreset } from './settings.js';
-import { initAudio, applyAudioSettings, playSfx } from './audio.js';
+import { initAudio, applyAudioSettings, playSfx, updateHeartbeat } from './audio.js';
+import { startDeathSequence, updateDeath, isPlayerDying } from './death.js';
 import { FARMING_ENABLED, PAST_STORY_ENABLED } from './featureFlags.js';
 import { spawnBlood, updateBlood, clearBlood } from './blood.js';
 import {
@@ -80,7 +81,8 @@ import { serializeGame, getRuntimeSnapshot } from './saveGame.js';
 import {
   createPlayer, bindPlayerInput, updatePlayerMovement, updateFollowCamera,
   isInRange, nearestInRange, setPlayerPosition, PLAYER_INTERACT_RANGE,
-  attachFirstPerson, requestPlayerPointerLock, exitPlayerPointerLock, getLookDirection
+  attachFirstPerson, requestPlayerPointerLock, exitPlayerPointerLock, getLookDirection,
+  toggleFlashlight
 } from './player.js';
 import {
   spawnWeaponPickups, clearWeaponPickups, nearestWeaponPickup, animateWeaponPickups,
@@ -101,6 +103,9 @@ import {
   createLighting, updateLighting, applyLightingQuality
 } from './lighting.js';
 import {
+  emitNoise, tickActorNoise, maxNearbyAwareness, HEAR_RANGE_GUNSHOT
+} from './stealth.js';
+import {
   bindNetBridge, setNetHandlers, startHosting, joinSession, stopSession,
   isNetSession, isNetHost, isNetClient, getLocalPlayerId, getPeerCount, getListenInfo,
   sendWelcome, sendSnapshot, sendNetEvent, sendNetIntent, pumpNet, tickNetSend, setPeerCount
@@ -117,12 +122,14 @@ import {
 
 const canvas = document.getElementById('game-canvas');
 const minigameCanvas = document.getElementById('cave-minigame-canvas');
+const actionBarEl = document.getElementById('action-bar');
+const crosshairHintEl = document.getElementById('crosshair-hint');
+const lookPromptEl = document.getElementById('look-prompt');
+const crosshairEl = document.getElementById('crosshair');
 const minigameCtx = minigameCanvas.getContext('2d');
 const state = createGameState();
-const DEBUG_ENDPOINT = 'http://127.0.0.1:7299/ingest/8bc68156-38f8-493e-9aa8-401dffdaa1b4';
-const DEBUG_SESSION_ID = 'f124a0';
 
-let scene, camera, renderer, composer, controls, bloomPass;
+let scene, camera, renderer, composer, controls, bloomPass, ps1Pass;
 let raycaster, mouse;
 let appState = APP_STATE.TITLE;
 let previousAppState = null;
@@ -172,15 +179,6 @@ let netSnapAccum = 0;
 init().catch(err => console.error('Falha ao iniciar o jogo:', err));
 
 async function init() {
-  // #region agent log
-  debugLog('H2', 'init.start', {
-    hasCanvas: !!canvas,
-    hasMinigameCanvas: !!minigameCanvas,
-    minigameCtxOk: !!minigameCtx,
-    viewport: { w: window.innerWidth, h: window.innerHeight }
-  });
-  // #endregion
-
   await loadWorldMap();
   applyWorldMap();
   applyMapPortals();
@@ -197,7 +195,7 @@ async function init() {
   camera.position.set(PLAYER_SPAWN.x, 1.6, PLAYER_SPAWN.z);
   camera.rotation.order = 'YXZ';
 
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.18;
@@ -218,14 +216,9 @@ async function init() {
   composer.addPass(new RenderPass(scene, camera));
   bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.42, 0.48, 0.78);
   composer.addPass(bloomPass);
+  ps1Pass = createPs1Pass(window.innerWidth, window.innerHeight);
+  composer.addPass(ps1Pass);
   composer.addPass(new OutputPass());
-  // #region agent log
-  debugLog('H2', 'init.renderer_ready', {
-    rendererSize: renderer.getSize(new THREE.Vector2()).toArray(),
-    pixelRatio: renderer.getPixelRatio(),
-    cameraAspect: camera.aspect
-  });
-  // #endregion
 
   applyGraphicsSettings(appSettings.graphics);
 
@@ -366,13 +359,7 @@ async function init() {
 
   showTitleScreen();
   refreshContinueButton();
-  // #region agent log
-  debugLog('H3', 'init.before_first_frame', {
-    appState,
-    sceneChildren: scene?.children?.length ?? null,
-    currentArea: getCurrentArea()
-  });
-  // #endregion
+  setPs1VertexSnap(false, scene);
 
   requestAnimationFrame(animate);
 }
@@ -382,7 +369,7 @@ function bindInput() {
   bindPlayerInput(player, renderer.domElement);
 
   renderer.domElement.addEventListener('wheel', (e) => {
-    if (appState !== APP_STATE.PLAYING) return;
+    if (appState !== APP_STATE.PLAYING || isPlayerDying()) return;
     e.preventDefault();
     cycleEquippedWeapon(Math.sign(e.deltaY));
   }, { passive: false });
@@ -431,6 +418,7 @@ function bindInput() {
 
   window.addEventListener('keydown', (e) => {
     if (appState !== APP_STATE.PLAYING) return;
+    if (isPlayerDying()) return;
     const openModal = document.querySelector('.modal:not(.hidden)');
     if (openModal) return;
 
@@ -445,6 +433,12 @@ function bindInput() {
       e.preventDefault();
       if (isLoreNoteOpen()) { hideLoreNote(); return; }
       tryInteractNearby();
+    }
+    if (e.key.toLowerCase() === 'l') {
+      const on = toggleFlashlight(player);
+      playSfx('flashlight_click');
+      showNotification(on ? 'Lanterna ligada.' : 'Lanterna apagada.');
+      updateStealthHUD({ awareness: player.targetFear || 0, flashlightOn: on });
     }
     if (e.key.toLowerCase() === 'f') {
       feedMode = !feedMode;
@@ -490,9 +484,6 @@ function bindInput() {
 }
 
 function bindUI() {
-  // #region agent log
-  debugLog('C', 'bindUI.start', { appState });
-  // #endregion
   bindModalCloses();
   bindUiClicks({
     'btn-shop': () => openGameModal('shop-modal'),
@@ -559,10 +550,6 @@ function bindUI() {
     feedMode = !feedMode;
     feedToggle.classList.toggle('active', feedMode);
     showNotification(feedMode ? 'Modo ração ativo.' : 'Modo ração desligado.');
-  });
-
-  document.querySelectorAll('.speed-btn').forEach(btn => {
-    btn.addEventListener('click', () => setTimeScale(Number(btn.dataset.speed)));
   });
 
   bindSettingsInputs();
@@ -636,11 +623,17 @@ function bindSettingsInputs() {
     applyGraphicsSettings(appSettings.graphics);
     saveSettings(appSettings);
   });
+  document.getElementById('setting-ps2')?.addEventListener('change', (e) => {
+    appSettings.graphics.ps2Filter = e.target.checked;
+    applyGraphicsSettings(appSettings.graphics);
+    saveSettings(appSettings);
+  });
 }
 
 function bindPauseKey() {
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
+    if (isPlayerDying()) return;
 
     if (isModalOpen('join-modal')) {
       closeModal('join-modal');
@@ -676,19 +669,10 @@ function showTitleScreen() {
   closeAllModalsExcept('title-screen');
   titleScreenEl.classList.remove('hidden');
   document.getElementById('hud').classList.add('hidden');
-  document.getElementById('hud-clock')?.classList.add('hidden');
   document.getElementById('controls').classList.add('hidden');
-  document.getElementById('speed-controls').classList.add('hidden');
   document.getElementById('weapon-hud')?.classList.add('hidden');
   hideDialogue();
   refreshNetHud();
-  // #region agent log
-  debugLog('H8', 'title_screen.shown', {
-    className: titleScreenEl.className,
-    display: window.getComputedStyle(titleScreenEl).display,
-    opacity: window.getComputedStyle(titleScreenEl).opacity
-  });
-  // #endregion
 }
 
 function enterPlayingState() {
@@ -696,9 +680,7 @@ function enterPlayingState() {
   document.getElementById('title-screen').classList.add('hidden');
   closeModal('pause-menu');
   document.getElementById('hud').classList.remove('hidden');
-  document.getElementById('hud-clock')?.classList.remove('hidden');
   document.getElementById('controls').classList.remove('hidden');
-  document.getElementById('speed-controls').classList.remove('hidden');
   document.getElementById('weapon-hud')?.classList.remove('hidden');
   initAudio();
   updateWeaponHUD(state);
@@ -707,11 +689,6 @@ function enterPlayingState() {
 }
 
 async function startNewGame() {
-  // #region agent log
-  debugLog('H9', 'start_new_game.clicked', {
-    appStateBefore: appState
-  });
-  // #endregion
   initAudio();
   const proceed = () => {
     enemies.slice().forEach(e => removeEnemy(scene, enemies, e));
@@ -1014,6 +991,8 @@ function collectNetTargets() {
     playerId: isNetSession() ? getLocalPlayerId() : NET_HOST_PLAYER_ID,
     pos: player.mesh.position,
     crouched: !!player.crouched,
+    flashlightOn: !!player.flashlightOn,
+    noiseRadius: player.noiseRadius || 0,
     actor: player,
     bag: state
   }];
@@ -1022,6 +1001,8 @@ function collectNetTargets() {
       playerId: remote.id,
       pos: remote.player.mesh.position,
       crouched: !!remote.player.crouched,
+      flashlightOn: !!remote.player.flashlightOn,
+      noiseRadius: remote.player.noiseRadius || 0,
       actor: remote.player,
       bag: remote.bag
     });
@@ -1101,7 +1082,7 @@ function onNetSnapshot(msg) {
   const keep = [];
   (msg.players || []).forEach(snap => {
     if (snap.id === getLocalPlayerId()) {
-      applyVitalsToBag(state, snap);
+      if (!isPlayerDying()) applyVitalsToBag(state, snap);
       if (viewmodel && snap.weapon && viewmodel.userData?.weaponId !== snap.weapon) {
         setViewmodelWeapon(viewmodel, snap.weapon);
       }
@@ -1160,6 +1141,7 @@ function onNetGameEvent(evt) {
       color: 0x8a8a82
     });
     playSfx('gunshot', { volume: evt.weaponId === 'espingarda' ? 1.15 : 0.9 });
+    if (player) emitNoise(player, HEAR_RANGE_GUNSHOT);
     return;
   }
   if (evt.kind === 'swing' && evt.playerId !== getLocalPlayerId()) {
@@ -1172,7 +1154,7 @@ function onNetGameEvent(evt) {
     return;
   }
   if (evt.kind === 'death' && evt.playerId === getLocalPlayerId()) {
-    applyLocalRespawn();
+    beginLocalDeath({ moneyPenalty: evt.moneyPenalty || 0, fromNet: true });
     return;
   }
   if (evt.kind === 'pickup') {
@@ -1229,6 +1211,8 @@ function updateSettingsUI() {
   document.getElementById('setting-mute').textContent = appSettings.audio.muted ? 'Reativar Som' : 'Silenciar';
   document.getElementById('setting-shadows').checked = appSettings.graphics.shadows;
   document.getElementById('setting-bloom').checked = appSettings.graphics.bloom;
+  const ps2El = document.getElementById('setting-ps2');
+  if (ps2El) ps2El.checked = appSettings.graphics.ps2Filter !== false;
   document.querySelectorAll('[data-quality]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.quality === appSettings.graphics.quality);
   });
@@ -1238,7 +1222,10 @@ function applyGraphicsSettings(graphics) {
   if (!renderer) return;
   renderer.shadowMap.enabled = graphics.shadows;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, graphics.pixelRatioCap));
-  if (bloomPass) bloomPass.enabled = graphics.bloom;
+  const ps1On = graphics.ps2Filter !== false;
+  if (ps1Pass) ps1Pass.enabled = ps1On;
+  if (bloomPass) bloomPass.enabled = !!graphics.bloom && !ps1On;
+  setPs1VertexSnap(false, scene);
   applyLightingQuality(graphics);
   applyRenderScale(graphics.renderScale);
 }
@@ -1247,7 +1234,10 @@ function applyRenderScale(scale) {
   const w = window.innerWidth * scale;
   const h = window.innerHeight * scale;
   renderer.setSize(w, h, false);
+  composer.setPixelRatio(renderer.getPixelRatio());
   composer.setSize(w, h);
+  const rt = composer.renderTarget1;
+  updatePs1PassSize(ps1Pass, rt?.width ?? w, rt?.height ?? h);
 }
 
 // --- Save / Load ----------------------------------------------------------
@@ -1368,13 +1358,6 @@ function applySeasonalWorldTint() {
   }
 }
 
-function setTimeScale(scale) {
-  timeScale = scale;
-  document.querySelectorAll('.speed-btn').forEach(btn => {
-    btn.classList.toggle('active', Number(btn.dataset.speed) === scale);
-  });
-}
-
 function requireNear(targetPos, label) {
   if (!player || isInRange(player.mesh.position, targetPos, PLAYER_INTERACT_RANGE)) return true;
   showNotification(`Chegue mais perto ${label ? `de ${label}` : ''}.`);
@@ -1418,7 +1401,6 @@ function enterCaveMinigame() {
   exitPlayerPointerLock();
 
   document.getElementById('controls').classList.add('hidden');
-  document.getElementById('speed-controls').classList.add('hidden');
   document.getElementById('weapon-hud')?.classList.add('hidden');
   minigameCanvas.classList.remove('hidden');
   minigameCanvas.width = window.innerWidth;
@@ -1434,7 +1416,6 @@ function onExitCaveMinigame(summary) {
 
   minigameCanvas.classList.add('hidden');
   document.getElementById('controls').classList.remove('hidden');
-  document.getElementById('speed-controls').classList.remove('hidden');
   document.getElementById('weapon-hud')?.classList.remove('hidden');
   appState = previousAppState || APP_STATE.PLAYING;
 
@@ -1455,8 +1436,15 @@ function onExitCaveMinigame(summary) {
 }
 
 function applyFarmingFlag() {
-  const tools = document.getElementById('farm-tools');
-  if (tools) tools.classList.toggle('hidden', !FARMING_ENABLED);
+  const farmIds = [
+    'farm-tools', 'btn-feed',
+    'shop-seeds-section', 'shop-animals-section', 'shop-craft-section',
+    'upgrade-farm-card', 'upgrade-decor-card'
+  ];
+  farmIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('hidden', !FARMING_ENABLED);
+  });
 }
 
 function applyStoryFlag() {
@@ -1697,6 +1685,7 @@ function performAttack(actor, bag, cam, opts = {}) {
       attackAnimTime = 0;
       kickViewmodel(viewmodel, weapon.id === 'espingarda' ? 1.55 : 1.05);
       playSfx('gunshot', { volume: weapon.id === 'espingarda' ? 1.15 : 0.9 });
+      emitNoise(actor, HEAR_RANGE_GUNSHOT);
     } else {
       attackAnimTime = 0;
       kickViewmodel(viewmodel, 1);
@@ -1732,6 +1721,7 @@ function performAttack(actor, bag, cam, opts = {}) {
         color: 0x8a8a82
       });
       playSfx('gunshot', { volume: weapon.id === 'espingarda' ? 1.15 : 0.9 });
+      emitNoise(actor, HEAR_RANGE_GUNSHOT);
       if (isLocal) updateWeaponHUD(bag);
       if (isNetHost()) {
         sendNetEvent({ kind: 'fire', playerId, weaponId: weapon.id, x: origin.x, y, z: origin.z });
@@ -1865,7 +1855,7 @@ function cycleEquippedWeapon(dir = 1) {
 
 function onCanvasPointerDown(event) {
   if (event.button !== 0) return;
-  if (isTransitioning()) return;
+  if (isTransitioning() || isPlayerDying()) return;
   if (document.pointerLockElement !== renderer.domElement) {
     requestPlayerPointerLock(renderer.domElement);
     return;
@@ -2424,45 +2414,6 @@ function onResize() {
 }
 
 let simTime = 0;
-let debugFrameLogCount = 0;
-
-function debugLog(hypothesisId, message, data = {}, runId = 'initial') {
-  fetch(DEBUG_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Debug-Session-Id': DEBUG_SESSION_ID
-    },
-    body: JSON.stringify({
-      sessionId: DEBUG_SESSION_ID,
-      runId,
-      hypothesisId,
-      location: 'src/js/main.js',
-      message,
-      data,
-      timestamp: Date.now()
-    })
-  }).catch(() => {});
-}
-
-window.addEventListener('error', (event) => {
-  // #region agent log
-  debugLog('H1', 'window.error', {
-    message: event?.message || null,
-    source: event?.filename || null,
-    lineno: event?.lineno || null,
-    colno: event?.colno || null
-  });
-  // #endregion
-});
-
-window.addEventListener('unhandledrejection', (event) => {
-  // #region agent log
-  debugLog('H1', 'window.unhandledrejection', {
-    reason: String(event?.reason || 'unknown')
-  });
-  // #endregion
-});
 
 const ENEMY_TYPE_ROLL = [
   { type: 'Zumbi', weight: 0.42 },
@@ -2534,6 +2485,10 @@ function updateEnemiesAndCombat(isDay, simDelta) {
     }
     const event = updateEnemyAI(enemy, simDelta, targets, aiArea, safeZone);
     animateEnemy(enemy, simDelta);
+    if (enemy.justAlerted) {
+      enemy.justAlerted = false;
+      playSfx('alert_stinger', { volume: 0.85 });
+    }
 
     enemy.sfxTimer = (enemy.sfxTimer || 0) - simDelta;
     if (enemy.sfxTimer <= 0) {
@@ -2602,6 +2557,8 @@ function applyDamageToPlayer(amount, playerId = getLocalPlayerId()) {
   const found = actorForPlayerId(playerId);
   const actor = found.actor;
   const bag = found.bag;
+  if (found.isLocal && isPlayerDying()) return;
+  if (bag.playerHealth <= 0) return;
   const now = Date.now();
   const last = found.remote ? (found.remote.lastDamageTime || 0) : (actor.lastDamageTime || 0);
   if (now - last < PLAYER_DAMAGE_INVULN_MS) return;
@@ -2613,7 +2570,7 @@ function applyDamageToPlayer(amount, playerId = getLocalPlayerId()) {
   if (found.isLocal) {
     notes.forEach(note => showNotification(note));
     updateHUD(state);
-    playLocalDamageFeedback(amount);
+    if (bag.playerHealth > 0) playLocalDamageFeedback(amount);
   }
   if (isNetHost() && !found.isLocal) {
     sendNetEvent({ kind: 'damage', playerId, amount });
@@ -2638,17 +2595,8 @@ function playLocalDamageFeedback(amount) {
   setTimeout(() => flashEl.classList.remove('active'), 120);
 }
 
-function handlePlayerDeath(playerId = getLocalPlayerId()) {
-  const net = isNetSession();
-  if (!net) {
-    enemies.slice().forEach(e => removeEnemy(scene, enemies, e));
-    clearBlood(farmRoot);
-    if (lakeRoot) clearBlood(lakeRoot);
-  }
-
-  const found = actorForPlayerId(playerId);
+function applyDeathPenalties(found) {
   const bag = found.bag;
-  const actor = found.actor;
   bag.playerHealth = bag.playerMaxHealth;
   bag.energy = Math.max(0, bag.energy - PLAYER_RESPAWN_ENERGY_PENALTY);
   bag.bleeding = false;
@@ -2656,22 +2604,64 @@ function handlePlayerDeath(playerId = getLocalPlayerId()) {
   bag.hunger = Math.max(35, bag.hunger || 100);
   bag.thirst = Math.max(35, bag.thirst || 100);
   let moneyPenalty = 0;
-  if (found.isLocal || !net) {
-    moneyPenalty = Math.min(PLAYER_RESPAWN_MONEY_PENALTY_CAP, Math.round(state.money * PLAYER_RESPAWN_MONEY_PENALTY_PCT));
+  if (found.isLocal || !isNetSession()) {
+    moneyPenalty = Math.min(
+      PLAYER_RESPAWN_MONEY_PENALTY_CAP,
+      Math.round(state.money * PLAYER_RESPAWN_MONEY_PENALTY_PCT)
+    );
     state.money = Math.max(0, state.money - moneyPenalty);
   }
+  return moneyPenalty;
+}
 
-  const respawnX = HOUSE_POSITION.x;
-  const respawnZ = HOUSE_POSITION.z - 2;
-  if (found.isLocal) applyLocalRespawn();
-  else setPlayerPosition(actor, respawnX, respawnZ);
+function clearEnemiesAfterDeath() {
+  if (isNetSession()) return;
+  enemies.slice().forEach(e => removeEnemy(scene, enemies, e));
+}
 
-  if (isNetHost()) sendNetEvent({ kind: 'death', playerId, moneyPenalty });
-  if (found.isLocal) {
-    updateHUD(state);
-    showDialogue('Fazendeiro', 'Os zumbis te derrubaram... Você acordou em casa. Pegue uma arma e tome cuidado na noite.');
-    showNotification(`Desmaiou! -${PLAYER_RESPAWN_ENERGY_PENALTY} energia${moneyPenalty ? `, -R$ ${moneyPenalty}` : ''}.`);
+function finishLocalRespawn(moneyPenalty = 0) {
+  applyLocalRespawn();
+  if (player) player.lastDamageTime = Date.now() + (PLAYER_RESPAWN_INVULN_MS - PLAYER_DAMAGE_INVULN_MS);
+  updateHUD(state);
+  showNotification(
+    `Desmaiou! -${PLAYER_RESPAWN_ENERGY_PENALTY} energia${moneyPenalty ? `, -R$ ${moneyPenalty}` : ''}.`
+  );
+}
+
+function beginLocalDeath({ moneyPenalty = 0, fromNet = false } = {}) {
+  if (isPlayerDying()) return;
+  playSfx('player_die');
+  if (player) {
+    const pos = player.mesh.position;
+    spawnBlood(vfxRoot(), pos.x, pos.y, pos.z, { death: true, fromHeight: 1.1 });
   }
+  startDeathSequence({
+    player,
+    onApply: () => {
+      if (!fromNet) {
+        const found = actorForPlayerId(getLocalPlayerId());
+        moneyPenalty = applyDeathPenalties(found);
+        clearEnemiesAfterDeath();
+        if (isNetHost()) sendNetEvent({ kind: 'death', playerId: getLocalPlayerId(), moneyPenalty });
+      }
+      finishLocalRespawn(moneyPenalty);
+    }
+  });
+}
+
+function handlePlayerDeath(playerId = getLocalPlayerId()) {
+  const found = actorForPlayerId(playerId);
+  if (!found?.bag) return;
+  if (found.isLocal && isPlayerDying()) return;
+
+  if (found.isLocal) {
+    beginLocalDeath();
+    return;
+  }
+
+  const moneyPenalty = applyDeathPenalties(found);
+  setPlayerPosition(found.actor, HOUSE_POSITION.x, HOUSE_POSITION.z - 2);
+  if (isNetHost()) sendNetEvent({ kind: 'death', playerId, moneyPenalty });
 }
 
 function applyLocalRespawn() {
@@ -2691,31 +2681,6 @@ function animate() {
   const now = performance.now();
   const delta = (now - lastFrameTime) / 1000;
   lastFrameTime = now;
-
-  if (debugFrameLogCount < 3) {
-    const titleScreenEl = document.getElementById('title-screen');
-    const titleShellEl = document.querySelector('.title-shell');
-    // #region agent log
-    debugLog('H4', 'animate.frame', {
-      frame: debugFrameLogCount + 1,
-      appState,
-      delta,
-      cameraPos: camera ? { x: camera.position.x, y: camera.position.y, z: camera.position.z } : null,
-      canvasClient: canvas ? { w: canvas.clientWidth, h: canvas.clientHeight } : null,
-      titleScreen: titleScreenEl ? {
-        className: titleScreenEl.className,
-        display: window.getComputedStyle(titleScreenEl).display,
-        opacity: window.getComputedStyle(titleScreenEl).opacity
-      } : null,
-      titleShell: titleShellEl ? {
-        display: window.getComputedStyle(titleShellEl).display,
-        opacity: window.getComputedStyle(titleShellEl).opacity,
-        rect: titleShellEl.getBoundingClientRect().toJSON ? titleShellEl.getBoundingClientRect().toJSON() : null
-      } : null
-    });
-    // #endregion
-    debugFrameLogCount++;
-  }
 
   if (appState === APP_STATE.CAVE_MINIGAME) {
     updateCaveMinigame(delta);
@@ -2737,11 +2702,12 @@ function animate() {
   if (isNetClient() && player && !localPaused) tickNetSend(delta, player);
 
   let moving = false;
-  if (!isTransitioning() && !localPaused) {
+  const liveEnemyBumpers = enemies.filter(e => e.state !== 'dead').map(e => ({
+    x: e.mesh.position.x, z: e.mesh.position.z, radius: e.type === 'ZumbiBruto' ? 0.48 : 0.36
+  }));
+  if (!isTransitioning() && !localPaused && !isPlayerDying()) {
     const blockers = [
-      ...enemies.filter(e => e.state !== 'dead').map(e => ({
-        x: e.mesh.position.x, z: e.mesh.position.z, radius: e.type === 'ZumbiBruto' ? 0.48 : 0.36
-      })),
+      ...liveEnemyBumpers,
       ...villageNpcs().filter(n => n.visible !== false).map(n => ({
         x: n.position.x, z: n.position.z, radius: n.userData.dead ? 0.28 : 0.34
       })),
@@ -2753,6 +2719,7 @@ function animate() {
         updateHUD(state);
       }
     }, blockers, { energyRatio: state.energy / Math.max(1, state.maxEnergy || 100) });
+    tickActorNoise(player, delta);
     const pos = player.mesh.position;
     if (player.stepEvent) {
       spawnDust(vfxRoot(), pos.x, pos.y, pos.z, {
@@ -2768,21 +2735,27 @@ function animate() {
   if (isNetHost()) {
     hostedRemoteList().forEach(remote => {
       const bumps = [
-        ...enemies.filter(e => e.state !== 'dead').map(e => ({
-          x: e.mesh.position.x, z: e.mesh.position.z, radius: e.type === 'ZumbiBruto' ? 0.48 : 0.36
-        })),
+        ...liveEnemyBumpers,
         { x: player.mesh.position.x, z: player.mesh.position.z, radius: 0.34 },
         ...getRemoteBumpEntities(remote.id)
       ];
       updatePlayerMovement(remote.player, delta, (cost) => {
         if (remote.bag.energy > 0) remote.bag.energy = Math.max(0, remote.bag.energy - cost);
       }, bumps, { energyRatio: remote.bag.energy / Math.max(1, remote.bag.maxEnergy || 100) });
+      tickActorNoise(remote.player, delta);
       if (remote.player.reloading && Date.now() >= (remote.player.reloadUntil || 0)) {
         remote.player.reloading = false;
       }
     });
   }
   updateInterpRemotes(delta);
+  const awareness = player ? maxNearbyAwareness(enemies, player.mesh.position) : 0;
+  if (player) {
+    player.targetFear = awareness;
+    updateStealthHUD({ awareness, flashlightOn: !!player.flashlightOn });
+    updateHeartbeat(awareness, delta);
+  }
+  if (isPlayerDying()) updateDeath(delta, player);
   updateFollowCamera(camera, player, controls, delta);
 
   const fishResult = updateFishing(state, Date.now());
@@ -2819,7 +2792,7 @@ function animate() {
     const survivalEvents = tickSurvival(state, simDelta);
     if (survivalEvents.includes('dot')) {
       updateHUD(state);
-      if (state.playerHealth <= 0) handlePlayerDeath(getLocalPlayerId());
+      if (state.playerHealth <= 0 && !isPlayerDying()) handlePlayerDeath(getLocalPlayerId());
     }
     hostedRemoteList().forEach(remote => {
       const events = tickSurvival(remote.bag, simDelta);
@@ -2844,8 +2817,6 @@ function animate() {
     if (worldTime >= 5 * 60 && worldTime < 20 * 60) worldTime = 20 * 60;
   }
   const hours = Math.floor(worldTime / 60);
-  const minutes = Math.floor(worldTime % 60);
-  const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
   const isDay = false;
 
   const npcChair = houseGroup.userData.npc;
@@ -2891,9 +2862,6 @@ function animate() {
       });
     }
   }
-
-  document.getElementById('time-display').textContent = timeStr;
-  document.getElementById('time-icon').innerHTML = svgIcon(isDay ? 'sun' : 'moon');
 
   updateLighting({
     worldTime,
@@ -3092,7 +3060,7 @@ function animate() {
     const duration = isBatchHolding ? BATCH_HOLD_DURATION_MS : HOLD_DURATION_MS;
     const heldTime = now - holdStartTime;
     const progress = Math.min(100, (heldTime / duration) * 100);
-    document.getElementById('action-bar').style.width = `${progress}%`;
+    actionBarEl.style.width = `${progress}%`;
     if (heldTime >= duration) {
       if (isBatchHolding) {
         executeActionOnAllPlots();
@@ -3165,7 +3133,7 @@ function animate() {
   }
 
   // Hint de interação próxima
-  const hintEl = document.getElementById('crosshair-hint');
+  const hintEl = crosshairHintEl;
   if (hintEl && player) {
     const pos = player.mesh.position;
     const area = getCurrentArea();
@@ -3197,8 +3165,8 @@ function animate() {
     hintEl.classList.toggle('hidden', !hint);
   }
 
-  const lookPrompt = document.getElementById('look-prompt');
-  const crosshair = document.getElementById('crosshair');
+  const lookPrompt = lookPromptEl;
+  const crosshair = crosshairEl;
   const locked = !!player?.pointerLocked;
   if (lookPrompt) lookPrompt.classList.toggle('hidden', appState !== APP_STATE.PLAYING || locked);
   if (crosshair) {

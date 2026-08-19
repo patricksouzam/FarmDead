@@ -5,3 +5,4 @@ build/
 electron-test-extract/
 *.log
 .claude/
+.cursor/

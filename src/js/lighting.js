@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import { skyPaletteForSeason } from './seasons.js';
 
 const SHADOW_EXTENT = 40;
-const NIGHT_TOP = new THREE.Color(0x06101c);
-const NIGHT_BOTTOM = new THREE.Color(0x121820);
+const NIGHT_TOP = new THREE.Color(0x03060c);
+const NIGHT_BOTTOM = new THREE.Color(0x080c12);
 
 let sceneRef = null;
 let ambientLight = null;
@@ -112,11 +112,11 @@ function followShadowCaster(followPos, sunAngle, sunHeight) {
 }
 
 function applyBasementOverride() {
-  if (sunLight) sunLight.intensity = 0.02;
-  if (moonLight) moonLight.intensity = 0.06;
-  if (ambientLight) ambientLight.intensity = 0.1;
-  if (hemiLight) hemiLight.intensity = 0.14;
-  if (fillLight) fillLight.intensity = 0.04;
+  if (sunLight) sunLight.intensity = 0.01;
+  if (moonLight) moonLight.intensity = 0.03;
+  if (ambientLight) ambientLight.intensity = 0.04;
+  if (hemiLight) hemiLight.intensity = 0.06;
+  if (fillLight) fillLight.intensity = 0.02;
 }
 
 export function updateLighting({
@@ -169,10 +169,10 @@ export function updateLighting({
 
   sunLight.intensity = THREE.MathUtils.lerp(0.05, isDawnDusk ? 2.55 : 3.2, dayFactor);
   sunLight.color.setHex(isDawnDusk ? 0xffb06a : 0xfff0c8);
-  moonLight.intensity = THREE.MathUtils.lerp(1.15 + Math.sin(simTime * 0.12) * 0.18, 0, dayFactor);
-  ambientLight.intensity = THREE.MathUtils.lerp(0.16, 0.38, dayFactor);
-  hemiLight.intensity = THREE.MathUtils.lerp(0.22, 0.48, dayFactor);
-  fillLight.intensity = THREE.MathUtils.lerp(0.12, 0.28, dayFactor);
+  moonLight.intensity = THREE.MathUtils.lerp(0.42 + Math.sin(simTime * 0.12) * 0.08, 0, dayFactor);
+  ambientLight.intensity = THREE.MathUtils.lerp(0.055, 0.38, dayFactor);
+  hemiLight.intensity = THREE.MathUtils.lerp(0.08, 0.48, dayFactor);
+  fillLight.intensity = THREE.MathUtils.lerp(0.035, 0.28, dayFactor);
 
   if (areaPreset === 'basement') applyBasementOverride();
   else followShadowCaster(followPos, sunAngle, sunHeight);
@@ -186,7 +186,7 @@ export function updateLighting({
     scene.fog.color.copy(skyUniforms.bottomColor.value);
     const fogDay = 0.0025;
     const fogDusk = 0.0048;
-    const fogNight = 0.0155 + Math.sin(simTime * 0.18) * 0.0035;
+    const fogNight = 0.028 + Math.sin(simTime * 0.18) * 0.004;
     const fogTarget = (isDawnDusk
       ? THREE.MathUtils.lerp(fogNight, fogDusk, dayFactor)
       : THREE.MathUtils.lerp(fogNight, fogDay, dayFactor)) * weatherMul;
@@ -194,7 +194,7 @@ export function updateLighting({
   }
 
   if (renderer) {
-    renderer.toneMappingExposure = THREE.MathUtils.lerp(0.78, isDawnDusk ? 1.22 : 1.18, dayFactor);
+    renderer.toneMappingExposure = THREE.MathUtils.lerp(0.52, isDawnDusk ? 1.22 : 1.18, dayFactor);
   }
 
   if (treesEyes) treesEyes.visible = dayFactor < 0.15;

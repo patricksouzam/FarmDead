@@ -39,7 +39,8 @@ export function packInput(player, seq) {
       s: !!keys.sprint,
       j: !!keys.jump,
       c: !!keys.crouch,
-      a: !!keys.aim
+      a: !!keys.aim,
+      fl: !!player.flashlightOn
     },
     yaw: player.lookYaw ?? player.cameraYaw ?? 0,
     pitch: player.lookPitch ?? player.cameraPitch ?? 0
@@ -56,6 +57,7 @@ export function applyPackedKeys(player, packed) {
   player.keys.jump = !!packed.j;
   player.keys.crouch = !!packed.c;
   player.keys.aim = !!packed.a;
+  if (packed.fl != null) player.flashlightOn = !!packed.fl;
 }
 
 export function packPlayerSnapshot(id, player, bag) {
@@ -69,6 +71,8 @@ export function packPlayerSnapshot(id, player, bag) {
     pitch: player.cameraPitch || 0,
     speed: player.moveSpeed || 0,
     crouched: !!player.crouched,
+    flashlightOn: !!player.flashlightOn,
+    noiseRadius: player.noiseRadius || 0,
     airborne: !player.onGround,
     attacking: !!(player.meleeSwing || (player.attackCooldownUntil && Date.now() < player.attackCooldownUntil)),
     hp: bag.playerHealth,

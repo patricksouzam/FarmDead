@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:7299">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'">
 <title>Fazenda 3D</title>
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
@@ -54,6 +54,14 @@
       </div>
     </div>
     <div id="status-flags" class="status-flags hidden"></div>
+    <div id="stealth-hud">
+      <div id="stealth-eye" data-level="calm">·</div>
+      <div class="hud-stat-body">
+        <p class="label">Alerta</p>
+        <div class="stat-track"><div id="awareness-bar" class="stat-fill stat-fill-alert"></div></div>
+        <p id="flashlight-status" class="value">LANTERNA OFF</p>
+      </div>
+    </div>
     <div class="hud-resources">
       <div class="hud-chip pill">
         <span class="icon" data-icon="money"></span>
@@ -67,17 +75,8 @@
   </div>
 </div>
 
-<div id="hud-clock" class="hidden">
-  <span class="icon" id="time-icon" data-icon="sun"></span>
-  <div>
-    <p id="time-display" class="value">21:20</p>
-    <p id="season-display" class="label">Primavera</p>
-    <p id="season-days-display" class="subvalue">7 dias · depois Verão</p>
-  </div>
-</div>
-
 <div id="crosshair" class="hidden"></div>
-<div id="look-prompt" class="hidden">Clique para olhar · WASD mover · Ctrl agachar · Botão direito mirar · R recarregar</div>
+<div id="look-prompt" class="hidden">Clique para olhar · WASD mover · Ctrl agachar · L lanterna · Botão direito mirar · R recarregar</div>
 <div id="weapon-hud" class="hidden">
   <p id="weapon-name">Punhos</p>
   <p id="weapon-ammo" class="hidden">7 / 14</p>
@@ -87,6 +86,10 @@
 <div id="area-badge">Fazenda</div>
 <div id="net-hud" class="hidden">LAN</div>
 <div id="area-fade" aria-hidden="true"></div>
+<div id="death-overlay" class="hidden" aria-hidden="true">
+  <p class="death-title">VOCÊ DESMAIOU</p>
+  <p class="death-sub">Acordou em casa.</p>
+</div>
 <div id="damage-flash" aria-hidden="true"></div>
 <div id="lore-note-overlay" class="hidden">
   <div class="modal-panel lore-note-card">
@@ -111,20 +114,13 @@
     <button data-tool="weed" id="btn-weed" class="tool-btn"><kbd>4</kbd><span class="icon" data-icon="weed"></span>Arrancar</button>
   </div>
   <div class="hotbar-group">
-    <button id="btn-feed" class="menu-btn" type="button"><span class="icon" data-icon="wheat"></span>Ração</button>
+    <button id="btn-feed" class="menu-btn hidden" type="button"><span class="icon" data-icon="wheat"></span>Ração</button>
     <button id="btn-rest" class="menu-btn" type="button"><span class="icon" data-icon="energy"></span>Descansar</button>
     <button id="btn-inventory" class="menu-btn" type="button"><span class="icon" data-icon="egg"></span>Mochila</button>
     <button id="btn-shop" class="menu-btn"><span class="icon" data-icon="shop"></span>Loja</button>
     <button id="btn-upgrades" class="menu-btn"><span class="icon" data-icon="upgrades"></span>Melhorias</button>
     <button id="btn-sleep" class="menu-btn"><span class="icon" data-icon="moon"></span>Dormir</button>
   </div>
-</div>
-
-<div id="speed-controls">
-  <button data-speed="0" id="btn-speed-pause" class="speed-btn">⏸</button>
-  <button data-speed="1" id="btn-speed-1" class="speed-btn active">1x</button>
-  <button data-speed="2" id="btn-speed-2" class="speed-btn">2x</button>
-  <button data-speed="3" id="btn-speed-3" class="speed-btn">3x</button>
 </div>
 
 <div id="dusk-warning" class="hidden">Os zumbis saíram da mata. Pegue uma arma e sobreviva à noite.</div>
@@ -134,7 +130,7 @@
     <button class="close-btn" data-close="shop-modal"><span class="icon" data-icon="close"></span></button>
     <h2><span class="icon" data-icon="shop"></span>Loja &amp; Mercado</h2>
 
-    <div class="section">
+    <div class="section" id="shop-seeds-section">
       <h3>Comprar Sementes</h3>
       <div class="seed-grid">
         <button class="seed-btn" data-seed="Cenoura"><span class="icon seed-icon" data-icon="carrot"></span>Cenoura<br><span>R$ 10</span></button>
@@ -145,7 +141,7 @@
       </div>
     </div>
 
-    <div class="section">
+    <div class="section" id="shop-animals-section">
       <h3>Comprar Animais</h3>
       <div class="seed-grid">
         <button class="animal-btn" data-animal="Galinha"><span class="icon seed-icon" data-icon="chicken"></span>Galinha<br><span>R$ 60</span></button>
@@ -154,7 +150,7 @@
       </div>
     </div>
 
-    <div class="section">
+    <div class="section" id="shop-craft-section">
       <h3>Celeiro — Craft</h3>
       <p class="goal-hint">Craft também perto do celeiro (C / E).</p>
       <div class="water-refill craft-row">
@@ -185,12 +181,16 @@
 </div>
 
 <div id="inventory-modal" class="modal hidden">
-  <div class="modal-panel">
+  <div class="modal-panel inventory-panel">
     <button class="close-btn" data-close="inventory-modal"><span class="icon" data-icon="close"></span></button>
-    <h2><span class="icon" data-icon="egg"></span>Inventário &amp; Vendas</h2>
-    <div class="section">
-      <h3>Itens</h3>
-      <div id="inventory-list"></div>
+    <h2>ITENS</h2>
+    <div class="inventory-layout">
+      <div id="inventory-grid"></div>
+      <aside id="inventory-detail">
+        <p id="inv-detail-name">—</p>
+        <p id="inv-detail-meta">Selecione um item</p>
+        <div id="inv-detail-actions"></div>
+      </aside>
     </div>
   </div>
 </div>
@@ -209,7 +209,7 @@
       <p id="goal-hint" class="goal-hint"></p>
     </div>
 
-    <div class="upgrade-card">
+    <div class="upgrade-card" id="upgrade-farm-card">
       <h3>Expandir Fazenda</h3>
       <p>Aumente o número de blocos de plantio disponíveis.</p>
       <div class="upgrade-row">
@@ -254,7 +254,7 @@
       </div>
     </div>
 
-    <div class="upgrade-card">
+    <div class="upgrade-card" id="upgrade-decor-card">
       <h3>Decoração da Fazenda</h3>
       <p>Enfeitam a propriedade. Espantalho reduz ervas; cerca reforçada reduz risco de lobo.</p>
       <div class="upgrade-row">
@@ -302,9 +302,9 @@
 
 <div id="title-screen" class="modal">
   <div class="title-shell">
-    <span class="title-logo-mark">FarmCool</span>
-    <h1 class="title-logo">Fazenda 3D</h1>
-    <p class="title-tagline">Sobreviva à noite na fazenda. Clique para olhar, pegue uma arma e cuidado com os zumbis.<br>WASD andar · Mouse olhar · E interagir · Clique atacar</p>
+    <span class="title-logo-mark">FARMCOOL</span>
+    <h1 class="title-logo">FAZENDA 3D</h1>
+    <p class="title-tagline">A névoa engoliu a fazenda. Apague a lanterna. Não deixe que te vejam.<br>WASD andar · Ctrl agachar · L lanterna · E interagir · Clique atacar</p>
     <div class="title-menu">
       <button id="btn-new-game" class="title-btn title-btn-primary"><span class="icon" data-icon="play"></span>Novo Jogo</button>
       <button id="btn-continue" class="title-btn" disabled><span class="icon" data-icon="save"></span>Continuar</button>
@@ -318,7 +318,7 @@
 
 <div id="pause-menu" class="modal hidden">
   <div class="pause-shell">
-    <h2>Pausado</h2>
+    <h2>PAUSADO</h2>
     <div class="title-menu">
       <button id="btn-resume" class="title-btn title-btn-primary">Continuar</button>
       <button id="btn-pause-save" class="title-btn"><span class="icon" data-icon="save"></span>Salvar / Carregar</button>
@@ -393,14 +393,18 @@
         <span>Bloom (brilho)</span>
         <input type="checkbox" id="setting-bloom" checked>
       </div>
+      <div class="settings-row">
+        <span>Filtro PS1</span>
+        <input type="checkbox" id="setting-ps2" checked>
+      </div>
     </div>
 
     <div class="section">
       <h3><span class="icon" style="width:16px;height:16px;" data-icon="keyboard"></span> Controles</h3>
       <ul class="controls-list">
         <li>Clique no jogo para olhar · mouse fluido na 1ª pessoa</li>
-        <li>WASD / setas: andar · Shift: correr · Espaço: saltar</li>
-        <li>Clique esquerdo / Q: atacar · Scroll: trocar arma · E: pegar / interagir</li>
+        <li>WASD / setas: andar · Shift: correr · Espaço: saltar · Ctrl: agachar</li>
+        <li>L: lanterna · Clique esquerdo / Q: atacar · Scroll: trocar arma · E: pegar / interagir</li>
         <li>1–4: ferramentas · 5–8: armas coletadas</li>
         <li>E na caverna / portão da vila / lago: viajar</li>
         <li>C: craft no celeiro · R: descansar · F: modo ração</li>
@@ -460,106 +464,6 @@
     el.innerHTML = svgIcon(el.dataset.icon);
   });
 </script>
-<script type="module">
-  const DEBUG_ENDPOINT = 'http://127.0.0.1:7299/ingest/8bc68156-38f8-493e-9aa8-401dffdaa1b4';
-  const DEBUG_SESSION_ID = 'f124a0';
-  const debugLog = (hypothesisId, message, data = {}, runId = 'initial') => {
-    fetch(DEBUG_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Debug-Session-Id': DEBUG_SESSION_ID
-      },
-      body: JSON.stringify({
-        sessionId: DEBUG_SESSION_ID,
-        runId,
-        hypothesisId,
-        location: 'src/index.html',
-        message,
-        data,
-        timestamp: Date.now()
-      })
-    }).catch(() => {});
-  };
-
-  const overlaySnapshot = () => {
-    const ids = ['title-screen', 'lore-note-overlay', 'cave-minigame-canvas', 'area-fade', 'confirm-modal', 'pause-menu', 'game-canvas'];
-    const out = {};
-    for (const id of ids) {
-      const el = document.getElementById(id);
-      if (!el) { out[id] = null; continue; }
-      const cs = getComputedStyle(el);
-      out[id] = {
-        hiddenClass: el.classList.contains('hidden'),
-        display: cs.display,
-        pointerEvents: cs.pointerEvents,
-        zIndex: cs.zIndex
-      };
-    }
-    return out;
-  };
-
-  window.addEventListener('error', (event) => {
-    // #region agent log
-    debugLog('H5', 'bootstrap.window.error', {
-      message: event?.message || null,
-      source: event?.filename || null,
-      lineno: event?.lineno || null,
-      colno: event?.colno || null
-    });
-    // #endregion
-  });
-
-  window.addEventListener('unhandledrejection', (event) => {
-    // #region agent log
-    debugLog('H5', 'bootstrap.unhandledrejection', {
-      reason: String(event?.reason || 'unknown')
-    });
-    // #endregion
-  });
-
-  // #region agent log
-  debugLog('H5', 'bootstrap.before_main_import', {
-    readyState: document.readyState,
-    hasGameCanvas: !!document.getElementById('game-canvas')
-  });
-  // #endregion
-
-  import('./js/main.js')
-    .then(() => {
-      // #region agent log
-      debugLog('A', 'bootstrap.main_import_ok', { overlays: overlaySnapshot() });
-      // #endregion
-    })
-    .catch((err) => {
-      // #region agent log
-      debugLog('A', 'bootstrap.main_import_failed', {
-        error: String(err || 'unknown'),
-        overlays: overlaySnapshot()
-      });
-      // #endregion
-    });
-
-  let debugClickCount = 0;
-  document.addEventListener('click', (event) => {
-    if (debugClickCount >= 8) return;
-    debugClickCount += 1;
-    const t = event.target;
-    const el = t && t.closest ? (t.closest('button, a, [id]') || t) : t;
-    const hit = document.elementFromPoint(event.clientX, event.clientY);
-    // #region agent log
-    debugLog('D', 'document.click', {
-      n: debugClickCount,
-      tag: el && el.tagName,
-      id: el && el.id,
-      cls: el && el.className,
-      hitTag: hit && hit.tagName,
-      hitId: hit && hit.id,
-      hitCls: hit && hit.className,
-      hitPe: hit ? getComputedStyle(hit).pointerEvents : null
-    });
-    // #endregion
-  }, true);
-</script>
+<script type="module" src="./js/main.js"></script>
 </body>
 </html>

@@ -3,8 +3,20 @@ import { voxelBox, voxelMat } from './voxel.js';
 import { getGroundHeightAt } from './world.js';
 import { getCurrentArea } from './areas.js';
 
+const MAX_PUDDLES = 60;
+const MAX_DROPS = 120;
+
 const puddles = [];
 const drops = [];
+
+function pushPuddle(parent, entry) {
+  if (puddles.length >= MAX_PUDDLES) {
+    const old = puddles.shift();
+    if (parent) parent.remove(old.mesh);
+    else if (old.mesh.parent) old.mesh.parent.remove(old.mesh);
+  }
+  puddles.push(entry);
+}
 
 function bloodMat(emissive = 0.15) {
   return voxelMat(0x6a0c0c, {
@@ -31,7 +43,7 @@ export function spawnBlood(parent, x, y, z, {
   puddle.position.set(x + (Math.random() - 0.5) * 0.2, groundY + 0.03, z + (Math.random() - 0.5) * 0.2);
   puddle.rotation.y = Math.random() * Math.PI;
   parent.add(puddle);
-  puddles.push({ mesh: puddle, life: death ? 34 : 16, maxLife: death ? 34 : 16 });
+  pushPuddle(parent, { mesh: puddle, life: death ? 34 : 16, maxLife: death ? 34 : 16 });
 
   const n = count ?? (death ? 18 : 9);
   const dirX = dir?.x ?? 0;
@@ -52,6 +64,11 @@ export function spawnBlood(parent, x, y, z, {
     );
     drop.position.set(x, y + fromHeight, z);
     parent.add(drop);
+    if (drops.length >= MAX_DROPS) {
+      const old = drops.shift();
+      if (parent) parent.remove(old.mesh);
+      else if (old.mesh.parent) old.mesh.parent.remove(old.mesh);
+    }
     const spray = death ? 5.2 : 3.1;
     drops.push({
       mesh: drop,
@@ -92,7 +109,7 @@ export function updateBlood(delta, parent) {
         stain.position.set(d.mesh.position.x, groundY + 0.025, d.mesh.position.z);
         const host = d.mesh.parent || parent;
         if (host) host.add(stain);
-        puddles.push({ mesh: stain, life: 10, maxLife: 10 });
+        pushPuddle(host, { mesh: stain, life: 10, maxLife: 10 });
       }
       if (parent) parent.remove(d.mesh);
       else if (d.mesh.parent) d.mesh.parent.remove(d.mesh);
