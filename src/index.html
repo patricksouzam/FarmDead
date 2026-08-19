@@ -85,8 +85,16 @@
 </div>
 <div id="crosshair-hint" class="hidden"></div>
 <div id="area-badge">Fazenda</div>
+<div id="net-hud" class="hidden">LAN</div>
 <div id="area-fade" aria-hidden="true"></div>
 <div id="damage-flash" aria-hidden="true"></div>
+<div id="lore-note-overlay" class="hidden">
+  <div class="modal-panel lore-note-card">
+    <h2 id="lore-note-title">—</h2>
+    <p id="lore-note-body">—</p>
+    <p class="lore-note-hint">E ou ESC para fechar</p>
+  </div>
+</div>
 
 <div id="action-progress-container" class="hidden">
   <div class="action-box">
@@ -300,6 +308,8 @@
     <div class="title-menu">
       <button id="btn-new-game" class="title-btn title-btn-primary"><span class="icon" data-icon="play"></span>Novo Jogo</button>
       <button id="btn-continue" class="title-btn" disabled><span class="icon" data-icon="save"></span>Continuar</button>
+      <button id="btn-host-game" class="title-btn"><span class="icon" data-icon="house"></span>Hospedar partida</button>
+      <button id="btn-join-game" class="title-btn"><span class="icon" data-icon="play"></span>Entrar na partida</button>
       <button id="btn-title-settings" class="title-btn"><span class="icon" data-icon="settings"></span>Configurações</button>
     </div>
     <p class="title-version">v1.2.0</p>
@@ -314,6 +324,27 @@
       <button id="btn-pause-save" class="title-btn"><span class="icon" data-icon="save"></span>Salvar / Carregar</button>
       <button id="btn-pause-settings" class="title-btn"><span class="icon" data-icon="settings"></span>Configurações</button>
       <button id="btn-quit-to-title" class="title-btn title-btn-danger">Menu Principal</button>
+    </div>
+  </div>
+</div>
+
+<div id="join-modal" class="modal hidden">
+  <div class="modal-panel confirm-panel">
+    <button class="close-btn" data-close="join-modal"><span class="icon" data-icon="close"></span></button>
+    <h2>Entrar na partida</h2>
+    <p class="join-hint">No Radmin, cole o IP do host (geralmente começa com 26.) e a porta 7777.</p>
+    <label class="join-field">
+      IP do host
+      <input id="join-ip" type="text" inputmode="decimal" placeholder="26.x.x.x" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="join-field">
+      Porta
+      <input id="join-port" type="number" value="7777" min="1" max="65535">
+    </label>
+    <p id="join-status" class="join-status"></p>
+    <div class="confirm-actions">
+      <button id="join-cancel" class="title-btn" data-close="join-modal">Cancelar</button>
+      <button id="join-confirm" class="title-btn title-btn-primary">Conectar</button>
     </div>
   </div>
 </div>

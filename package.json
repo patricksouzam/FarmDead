@@ -19,16 +19,34 @@
   "build": {
     "appId": "com.fazenda3d.app",
     "productName": "Fazenda 3D",
-    "win": {
-      "target": "nsis"
-    },
     "files": [
       "main.js",
       "preload.js",
+      "netIpc.js",
       "src/**/*"
-    ]
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        },
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "portable": {
+      "artifactName": "Fazenda3D-Portable-${version}.${ext}"
+    }
   },
   "dependencies": {
-    "three": "^0.185.1"
+    "three": "^0.185.1",
+    "ws": "^8.21.3"
   }
 }

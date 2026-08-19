@@ -10,6 +10,7 @@ import {
   BASEMENT_ENTER_SPAWN
 } from './world.js';
 import { getMap } from './mapLoader.js';
+import { setAreaPreset } from './lighting.js';
 
 export const AREA = {
   FARM: 'farm',
@@ -107,6 +108,7 @@ export function applyAreaState(areaId) {
   currentArea = areaId;
   setActiveObstacleArea(areaId);
   applyAreaVisibility(areaId);
+  setAreaPreset(areaId === AREA.BASEMENT ? 'basement' : 'overworld');
 }
 
 function ensureFadeEl() {

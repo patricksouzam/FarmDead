@@ -6,7 +6,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 import {
-  createScene, createSky, createLights, createGround, createFences,
+  createScene, createSky, createGround, createFences,
   createTrees, createWindmill, createHouse, buildHouse, createCar, buildCar,
   createBarn, createSilo, createPaths, createClouds, createCorral,
   createSun, createMoon, createWindSystem, updateWind, applyWindEffects,
@@ -30,7 +30,7 @@ import {
   maybeSpawnWeed, removeWeed, setPlotNeedsWaterHint
 } from './crops.js';
 import { spawnAnimal, updateAnimalAI, animateAnimal, removeAnimal, createWolfMesh, updateWolfPatrol } from './animals.js';
-import { spawnEnemy, updateEnemyAI, animateEnemy, removeEnemy, poseEnemyCorpse } from './enemies.js';
+import { spawnEnemy, updateEnemyAI, animateEnemy, removeEnemy, poseEnemyCorpse, syncEnemiesFromSnapshot, interpolateNetEnemies } from './enemies.js';
 import { beginMeleeSwing, fireWeaponProjectiles, updateArrows, equippedWeapon, updateMeleeSwing } from './combat.js';
 import { checkGoals, getActiveGoal } from './goals.js';
 import {
@@ -48,7 +48,9 @@ import {
 } from './gameState.js';
 import {
   updateHUD, updateInventoryUI, updateUpgradesUI, showNotification, setActiveTool, updateGoalsUI,
-  setDuskWarning, showDialogue, hideDialogue, showChapterIntro, showConfirmDialog, updateWeaponHUD
+  updateNetHud, setDuskWarning, showDialogue, hideDialogue, showChapterIntro, showConfirmDialog, updateWeaponHUD,
+  openModal, closeModal, toggleModal, closeTopModal, isAnyGameModalOpen, isModalOpen,
+  closeAllModalsExcept, bindModalCloses, bindUiClicks, renderInvRow
 } from './ui.js';
 import {
   seasonForDay, dayOfSeasonFor, growthMultiplierForSeason, skyPaletteForSeason,
@@ -95,6 +97,23 @@ import {
   nearestPortal, transitionToArea, forceArea, getMinimapMarkers, isTransitioning,
   applyMapPortals
 } from './areas.js';
+import {
+  createLighting, updateLighting, applyLightingQuality
+} from './lighting.js';
+import {
+  bindNetBridge, setNetHandlers, startHosting, joinSession, stopSession,
+  isNetSession, isNetHost, isNetClient, getLocalPlayerId, getPeerCount, getListenInfo,
+  sendWelcome, sendSnapshot, sendNetEvent, sendNetIntent, pumpNet, tickNetSend, setPeerCount
+} from './net/session.js';
+import {
+  NET_DEFAULT_PORT, NET_HOST_PLAYER_ID, NET_SEND_INTERVAL, preferredHostIp,
+  spawnOffsetFor, applyPackedKeys, packPlayerSnapshot, packEnemySnapshot, applyVitalsToBag
+} from './net/protocol.js';
+import {
+  createHostedRemote, getHostedRemote, hostedRemoteList,
+  upsertInterpRemote, pruneInterpRemotes, updateInterpRemotes, getRemoteBumpEntities,
+  removeRemote, clearAllRemotes
+} from './net/remotePlayers.js';
 
 const canvas = document.getElementById('game-canvas');
 const minigameCanvas = document.getElementById('cave-minigame-canvas');
@@ -109,7 +128,7 @@ let appState = APP_STATE.TITLE;
 let previousAppState = null;
 let appSettings = loadSettings();
 let giftTargetNpc = null;
-let sunLight, ambientLight, hemiLight, moonLight, fillLight, skyUniforms;
+let skyUniforms;
 let houseGroup, carGroup, windmill, clouds, treesGroup, groundMesh, barnGroup;
 let sunMesh, moonMesh, windSystem, planeWreckGroup, lakeGroup;
 let farmRoot, caveRoot, villageRoot, lakeRoot, basementRoot;
@@ -148,6 +167,7 @@ let viewmodel = null;
 let enemySpawnTimer = 0;
 let attackAnimTime = null;
 const ATTACK_ANIM_DURATION = 0.28;
+let netSnapAccum = 0;
 
 init().catch(err => console.error('Falha ao iniciar o jogo:', err));
 
@@ -171,7 +191,7 @@ async function init() {
   sunMesh = createSun(scene);
   moonMesh = createMoon(scene);
   windSystem = createWindSystem(scene);
-  ({ ambientLight, hemiLight, sunLight, moonLight, fillLight } = createLights(scene));
+  createLighting(scene);
 
   camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.06, 500);
   camera.position.set(PLAYER_SPAWN.x, 1.6, PLAYER_SPAWN.z);
@@ -318,6 +338,18 @@ async function init() {
   bindInput();
   bindUI();
   bindPauseKey();
+  bindNetBridge();
+  setNetHandlers({
+    onPeerJoined: onNetPeerJoined,
+    onPeerLeft: onNetPeerLeft,
+    onWelcome: onNetWelcome,
+    onSnapshot: onNetSnapshot,
+    onInput: onNetInput,
+    onIntent: onNetIntent,
+    onEvent: onNetGameEvent,
+    onDisconnected: onNetDisconnected,
+    onError: (message) => showNotification(message || 'Erro de rede.')
+  });
   applyFarmingFlag();
   applyStoryFlag();
   attachWorldSmoke();
@@ -458,11 +490,30 @@ function bindInput() {
 }
 
 function bindUI() {
-  document.getElementById('btn-shop').addEventListener('click', () => toggleModal('shop-modal'));
-  document.getElementById('btn-inventory').addEventListener('click', () => toggleModal('inventory-modal'));
-  document.getElementById('btn-upgrades').addEventListener('click', () => toggleModal('upgrades-modal'));
-  document.querySelectorAll('[data-close]').forEach(btn => {
-    btn.addEventListener('click', () => document.getElementById(btn.dataset.close).classList.add('hidden'));
+  bindModalCloses();
+  bindUiClicks({
+    'btn-shop': () => openGameModal('shop-modal'),
+    'btn-inventory': () => openGameModal('inventory-modal'),
+    'btn-upgrades': () => openGameModal('upgrades-modal'),
+    'btn-refill-water': refillWater,
+    'btn-upgrade-farm': upgradeFarm,
+    'btn-upgrade-house': upgradeHouse,
+    'btn-buy-car': buyCar,
+    'btn-buy-well': buyWell,
+    'btn-buy-artesian-well': buyArtesianWell,
+    'btn-buy-fertilizer': buyFertilizer,
+    'dialogue-close': hideDialogue,
+    'btn-sleep': sleepUntilDawn,
+    'btn-new-game': startNewGame,
+    'btn-continue': () => continueGame(1),
+    'btn-host-game': hostMultiplayer,
+    'btn-join-game': openJoinModal,
+    'btn-title-settings': () => openSettings(APP_STATE.TITLE),
+    'btn-resume': togglePause,
+    'btn-pause-settings': () => openSettings(APP_STATE.PAUSED),
+    'btn-pause-save': () => openGameModal('save-modal'),
+    'btn-quit-to-title': quitToTitle,
+    'btn-close-settings': closeSettings
   });
   document.querySelectorAll('.seed-btn').forEach(btn => {
     btn.addEventListener('click', () => buySeed(btn.dataset.seed));
@@ -470,15 +521,6 @@ function bindUI() {
   document.querySelectorAll('.animal-btn').forEach(btn => {
     btn.addEventListener('click', () => buyAnimal(btn.dataset.animal));
   });
-  document.getElementById('btn-refill-water').addEventListener('click', refillWater);
-  document.getElementById('btn-upgrade-farm').addEventListener('click', upgradeFarm);
-  document.getElementById('btn-upgrade-house').addEventListener('click', upgradeHouse);
-  document.getElementById('btn-buy-car').addEventListener('click', buyCar);
-  document.getElementById('btn-buy-well').addEventListener('click', buyWell);
-  document.getElementById('btn-buy-artesian-well').addEventListener('click', buyArtesianWell);
-  document.getElementById('btn-buy-fertilizer').addEventListener('click', buyFertilizer);
-  document.getElementById('dialogue-close').addEventListener('click', hideDialogue);
-  document.getElementById('btn-sleep').addEventListener('click', sleepUntilDawn);
   document.querySelectorAll('.decor-btn').forEach(btn => {
     btn.addEventListener('click', () => buyDecoration(btn.dataset.decor));
   });
@@ -520,16 +562,6 @@ function bindUI() {
     btn.addEventListener('click', () => setTimeScale(Number(btn.dataset.speed)));
   });
 
-  document.getElementById('btn-new-game').addEventListener('click', startNewGame);
-  document.getElementById('btn-continue').addEventListener('click', () => continueGame(1));
-  document.getElementById('btn-title-settings').addEventListener('click', () => openSettings(APP_STATE.TITLE));
-
-  document.getElementById('btn-resume').addEventListener('click', togglePause);
-  document.getElementById('btn-pause-settings').addEventListener('click', () => openSettings(APP_STATE.PAUSED));
-  document.getElementById('btn-pause-save').addEventListener('click', () => toggleModal('save-modal'));
-  document.getElementById('btn-quit-to-title').addEventListener('click', quitToTitle);
-
-  document.getElementById('btn-close-settings').addEventListener('click', closeSettings);
   bindSettingsInputs();
 
   document.querySelectorAll('#save-modal [data-slot]').forEach(row => {
@@ -540,6 +572,24 @@ function bindUI() {
     row.querySelector('.export-btn').addEventListener('click', () => window.farmSave.exportSave(slot));
     row.querySelector('.import-btn').addEventListener('click', () => importSaveSlot(slot));
   });
+
+  document.getElementById('join-confirm')?.addEventListener('click', confirmJoinMultiplayer);
+  document.querySelectorAll('#join-modal [data-close="join-modal"]').forEach(el => {
+    el.addEventListener('click', () => {
+      if (appState === APP_STATE.TITLE && isNetClient()) teardownNetSession();
+    });
+  });
+  document.getElementById('join-ip')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') confirmJoinMultiplayer();
+  });
+}
+
+function openGameModal(id) {
+  const opened = toggleModal(id);
+  if (opened) exitPlayerPointerLock();
+  if (opened && (id === 'shop-modal' || id === 'inventory-modal')) {
+    updateInventoryUI(state, sellCrop, sellProduct, selectActiveSeed);
+  }
 }
 
 function bindSettingsInputs() {
@@ -589,19 +639,22 @@ function bindPauseKey() {
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
 
+    if (isModalOpen('join-modal')) {
+      closeModal('join-modal');
+      return;
+    }
+
     if (isLoreNoteOpen()) { hideLoreNote(); return; }
 
-    const confirmModal = document.getElementById('confirm-modal');
-    if (confirmModal && !confirmModal.classList.contains('hidden')) {
+    if (isModalOpen('confirm-modal')) {
       document.getElementById('confirm-cancel')?.click();
       return;
     }
 
     if (appState === APP_STATE.SETTINGS) { closeSettings(); return; }
 
-    const openModal = document.querySelector('.modal:not(.hidden):not(#title-screen):not(#pause-menu):not(#confirm-modal)');
-    if (appState === APP_STATE.PLAYING && openModal) {
-      openModal.classList.add('hidden');
+    if (appState === APP_STATE.PLAYING && isAnyGameModalOpen()) {
+      closeTopModal();
       return;
     }
     if (appState === APP_STATE.PLAYING && player?.pointerLocked) {
@@ -617,17 +670,15 @@ function bindPauseKey() {
 function showTitleScreen() {
   appState = APP_STATE.TITLE;
   const titleScreenEl = document.getElementById('title-screen');
+  closeAllModalsExcept('title-screen');
   titleScreenEl.classList.remove('hidden');
-  document.getElementById('pause-menu').classList.add('hidden');
   document.getElementById('hud').classList.add('hidden');
   document.getElementById('hud-clock')?.classList.add('hidden');
   document.getElementById('controls').classList.add('hidden');
   document.getElementById('speed-controls').classList.add('hidden');
   document.getElementById('weapon-hud')?.classList.add('hidden');
-  document.querySelectorAll('.modal').forEach(m => {
-    if (m.id !== 'title-screen') m.classList.add('hidden');
-  });
   hideDialogue();
+  refreshNetHud();
   // #region agent log
   debugLog('H8', 'title_screen.shown', {
     className: titleScreenEl.className,
@@ -640,7 +691,7 @@ function showTitleScreen() {
 function enterPlayingState() {
   appState = APP_STATE.PLAYING;
   document.getElementById('title-screen').classList.add('hidden');
-  document.getElementById('pause-menu').classList.add('hidden');
+  closeModal('pause-menu');
   document.getElementById('hud').classList.remove('hidden');
   document.getElementById('hud-clock')?.classList.remove('hidden');
   document.getElementById('controls').classList.remove('hidden');
@@ -648,6 +699,7 @@ function enterPlayingState() {
   document.getElementById('weapon-hud')?.classList.remove('hidden');
   initAudio();
   updateWeaponHUD(state);
+  refreshNetHud();
   showNotification('Noite eterna. Clique para olhar, E para pegar armas, clique esquerdo para atacar.');
 }
 
@@ -679,11 +731,13 @@ async function startNewGame() {
         confirmLabel: 'Começar',
         danger: false
       });
-      if (!ok) return;
+      if (!ok) return false;
     }
     proceed();
+    return true;
   } catch {
     proceed();
+    return true;
   }
 }
 
@@ -861,10 +915,10 @@ function togglePause() {
   if (appState === APP_STATE.PLAYING) {
     exitPlayerPointerLock();
     appState = APP_STATE.PAUSED;
-    document.getElementById('pause-menu').classList.remove('hidden');
+    openModal('pause-menu');
   } else if (appState === APP_STATE.PAUSED) {
     appState = APP_STATE.PLAYING;
-    document.getElementById('pause-menu').classList.add('hidden');
+    closeModal('pause-menu');
   }
 }
 
@@ -876,20 +930,293 @@ async function quitToTitle() {
     danger: true
   });
   if (!ok) return;
-  document.getElementById('pause-menu').classList.add('hidden');
+  await teardownNetSession();
+  closeModal('pause-menu');
   showTitleScreen();
   refreshContinueButton();
+}
+
+function refreshNetHud() {
+  if (!isNetSession() || appState === APP_STATE.TITLE) {
+    updateNetHud({ visible: false });
+    return;
+  }
+  const count = getPeerCount();
+  if (isNetHost()) {
+    const info = getListenInfo();
+    const ip = preferredHostIp(info.ips);
+    updateNetHud({ visible: true, text: `Host · ${ip}:${info.port} · ${count}/4` });
+  } else {
+    updateNetHud({ visible: true, text: `Conectado · ${count}/4` });
+  }
+}
+
+async function teardownNetSession() {
+  await stopSession();
+  clearAllRemotes();
+  netSnapAccum = 0;
+  refreshNetHud();
+}
+
+function resetCombatWorld() {
+  enemies.slice().forEach(e => removeEnemy(scene, enemies, e));
+  arrows.forEach(a => scene.remove(a.mesh));
+  arrows = [];
+  forceArea(AREA.FARM, () => {
+    if (player) setPlayerPosition(player, PLAYER_SPAWN.x, PLAYER_SPAWN.z);
+    updateAreaBadge(getAreaLabel());
+  });
+}
+
+async function hostMultiplayer() {
+  const started = await startNewGame();
+  if (!started && appState !== APP_STATE.PLAYING) return;
+  const result = await startHosting(NET_DEFAULT_PORT);
+  if (!result.ok) {
+    showNotification(result.error);
+    return;
+  }
+  refreshNetHud();
+  const ip = preferredHostIp(result.ips);
+  showNotification(`Hospedando em ${ip}:${result.port}. Mande esse IP (Radmin) para os amigos.`);
+}
+
+function openJoinModal() {
+  const status = document.getElementById('join-status');
+  if (status) status.textContent = '';
+  const portEl = document.getElementById('join-port');
+  if (portEl && !portEl.value) portEl.value = String(NET_DEFAULT_PORT);
+  openModal('join-modal');
+  document.getElementById('join-ip')?.focus();
+}
+
+async function confirmJoinMultiplayer() {
+  const ip = document.getElementById('join-ip')?.value.trim();
+  const port = Number(document.getElementById('join-port')?.value) || NET_DEFAULT_PORT;
+  const status = document.getElementById('join-status');
+  if (!ip) {
+    if (status) status.textContent = 'Cole o IP do host (Radmin, em geral 26.x.x.x).';
+    return;
+  }
+  if (status) status.textContent = 'Aguardando o host...';
+  const result = await joinSession(ip, port);
+  if (!result.ok) {
+    if (status) status.textContent = result.error;
+    showNotification(result.error);
+  }
+}
+
+function collectNetTargets() {
+  const targets = [{
+    playerId: isNetSession() ? getLocalPlayerId() : NET_HOST_PLAYER_ID,
+    pos: player.mesh.position,
+    crouched: !!player.crouched,
+    actor: player,
+    bag: state
+  }];
+  hostedRemoteList().forEach(remote => {
+    targets.push({
+      playerId: remote.id,
+      pos: remote.player.mesh.position,
+      crouched: !!remote.player.crouched,
+      actor: remote.player,
+      bag: remote.bag
+    });
+  });
+  return targets;
+}
+
+function actorForPlayerId(playerId) {
+  if (!isNetSession() || playerId === getLocalPlayerId() || playerId == null) {
+    return { actor: player, bag: state, isLocal: true };
+  }
+  const remote = getHostedRemote(playerId);
+  if (remote) return { actor: remote.player, bag: remote.bag, isLocal: false, remote };
+  return { actor: player, bag: state, isLocal: playerId === getLocalPlayerId() };
+}
+
+function buildWelcome(peerId) {
+  const spawn = spawnOffsetFor(peerId, PLAYER_SPAWN);
+  return {
+    playerId: peerId,
+    peerCount: getPeerCount(),
+    worldSeed: state.worldSeed || 12345,
+    worldTime,
+    spawn,
+    players: [
+      packPlayerSnapshot(NET_HOST_PLAYER_ID, player, state),
+      ...hostedRemoteList().map(r => packPlayerSnapshot(r.id, r.player, r.bag))
+    ],
+    enemies: enemies.map(packEnemySnapshot),
+    pickups: weaponPickups.map(p => ({ id: p.userData.weaponId, x: p.position.x, z: p.position.z }))
+  };
+}
+
+function onNetPeerJoined(peerId) {
+  if (!isNetHost() || !player) return;
+  const spawn = spawnOffsetFor(peerId, PLAYER_SPAWN);
+  createHostedRemote(scene, peerId, spawn);
+  sendWelcome(peerId, buildWelcome(peerId));
+  sendNetEvent({ kind: 'peerJoin', playerId: peerId, peerCount: getPeerCount() });
+  refreshNetHud();
+  showNotification(`Amigo ${peerId + 1} entrou na fazenda.`);
+  playSfx('notification');
+}
+
+function onNetPeerLeft(peerId) {
+  removeRemote(peerId);
+  refreshNetHud();
+  if (isNetHost()) sendNetEvent({ kind: 'peerLeave', playerId: peerId, peerCount: getPeerCount() });
+  showNotification(`Amigo ${peerId + 1} saiu.`);
+}
+
+function onNetWelcome(msg) {
+  closeModal('join-modal');
+  resetCombatWorld();
+  if (msg.spawn && player) setPlayerPosition(player, msg.spawn.x, msg.spawn.z);
+  if (typeof msg.worldTime === 'number') worldTime = msg.worldTime;
+  syncEnemiesFromSnapshot(farmRoot || scene, enemies, msg.enemies || [], AREA.FARM);
+  (msg.players || []).forEach(snap => {
+    if (snap.id === getLocalPlayerId()) {
+      applyVitalsToBag(state, snap);
+      if (viewmodel) setViewmodelWeapon(viewmodel, state.equippedWeapon);
+    } else {
+      upsertInterpRemote(scene, snap);
+    }
+  });
+  pruneInterpRemotes((msg.players || []).map(p => p.id).filter(id => id !== getLocalPlayerId()));
+  enterPlayingState();
+  refreshNetHud();
+  showNotification('Entrou na partida. Cuidado com a noite.');
+  playSfx('notification');
+  updateHUD(state);
+}
+
+function onNetSnapshot(msg) {
+  if (!isNetClient()) return;
+  if (typeof msg.worldTime === 'number') worldTime = msg.worldTime;
+  const keep = [];
+  (msg.players || []).forEach(snap => {
+    if (snap.id === getLocalPlayerId()) {
+      applyVitalsToBag(state, snap);
+      if (viewmodel && snap.weapon && viewmodel.userData?.weaponId !== snap.weapon) {
+        setViewmodelWeapon(viewmodel, snap.weapon);
+      }
+      return;
+    }
+    keep.push(snap.id);
+    upsertInterpRemote(scene, snap);
+  });
+  pruneInterpRemotes(keep);
+  syncEnemiesFromSnapshot(farmRoot || scene, enemies, msg.enemies || [], AREA.FARM);
+  updateHUD(state);
+}
+
+function onNetInput(peerId, msg) {
+  if (!isNetHost()) return;
+  const remote = getHostedRemote(peerId);
+  if (!remote) return;
+  applyPackedKeys(remote.player, msg.keys);
+  if (typeof msg.yaw === 'number') {
+    remote.player.lookYaw = msg.yaw;
+    remote.player.cameraYaw = msg.yaw;
+  }
+  if (typeof msg.pitch === 'number') {
+    remote.player.lookPitch = msg.pitch;
+    remote.player.cameraPitch = msg.pitch;
+  }
+}
+
+function onNetIntent(peerId, msg) {
+  if (!isNetHost()) return;
+  const found = actorForPlayerId(peerId);
+  if (!found?.actor) return;
+  if (msg.kind === 'melee' || msg.kind === 'fire') {
+    performAttack(found.actor, found.bag, null, { localVfx: false, playerId: peerId });
+    return;
+  }
+  if (msg.kind === 'reload') {
+    performReloadFor(found.actor, found.bag);
+    return;
+  }
+  if (msg.kind === 'pickup') {
+    tryPickupFor(found.actor, found.bag, { broadcast: true, playerId: peerId });
+  }
+}
+
+function onNetGameEvent(evt) {
+  if (evt.kind === 'peerJoin' || evt.kind === 'peerLeave') {
+    if (evt.peerCount) setPeerCount(evt.peerCount);
+    refreshNetHud();
+    return;
+  }
+  if (evt.kind === 'fire' && evt.playerId !== getLocalPlayerId()) {
+    spawnSmokePuff(vfxRoot(), evt.x, evt.y, evt.z, {
+      count: evt.weaponId === 'espingarda' ? 8 : 4,
+      scale: evt.weaponId === 'espingarda' ? 1.15 : 0.7,
+      color: 0x8a8a82
+    });
+    playSfx('gunshot', { volume: evt.weaponId === 'espingarda' ? 1.15 : 0.9 });
+    return;
+  }
+  if (evt.kind === 'swing' && evt.playerId !== getLocalPlayerId()) {
+    playSfx('melee_swing');
+    spawnMeleeDust(vfxRoot(), evt.x, evt.y, evt.z);
+    return;
+  }
+  if (evt.kind === 'damage' && evt.playerId === getLocalPlayerId()) {
+    playLocalDamageFeedback(evt.amount);
+    return;
+  }
+  if (evt.kind === 'death' && evt.playerId === getLocalPlayerId()) {
+    applyLocalRespawn();
+    return;
+  }
+  if (evt.kind === 'pickup') {
+    const idx = weaponPickups.findIndex(p => p.userData.weaponId === evt.weaponId);
+    if (idx >= 0) {
+      const pickup = weaponPickups[idx];
+      if (pickup.parent) pickup.parent.remove(pickup);
+      weaponPickups.splice(idx, 1);
+    }
+    if (evt.playerId === getLocalPlayerId()) {
+      const def = getWeaponDef(evt.weaponId);
+      showNotification(`Pegou ${def.name}! Clique esquerdo para usar.`);
+      playSfx('harvest');
+    }
+  }
+}
+
+async function onNetDisconnected() {
+  if (appState === APP_STATE.TITLE) return;
+  showNotification('Caiu da partida.');
+  await teardownNetSession();
+  showTitleScreen();
+  refreshContinueButton();
+}
+
+function hostBroadcastSnapshot() {
+  if (!isNetHost() || !player) return;
+  sendSnapshot({
+    worldTime,
+    peerCount: getPeerCount(),
+    players: [
+      packPlayerSnapshot(NET_HOST_PLAYER_ID, player, state),
+      ...hostedRemoteList().map(r => packPlayerSnapshot(r.id, r.player, r.bag))
+    ],
+    enemies: enemies.map(packEnemySnapshot)
+  });
 }
 
 function openSettings(fromState) {
   previousAppState = fromState;
   appState = APP_STATE.SETTINGS;
-  document.getElementById('settings-modal').classList.remove('hidden');
+  openModal('settings-modal');
   updateSettingsUI();
 }
 
 function closeSettings() {
-  document.getElementById('settings-modal').classList.add('hidden');
+  closeModal('settings-modal');
   appState = previousAppState || APP_STATE.TITLE;
 }
 
@@ -909,6 +1236,7 @@ function applyGraphicsSettings(graphics) {
   renderer.shadowMap.enabled = graphics.shadows;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, graphics.pixelRatioCap));
   if (bloomPass) bloomPass.enabled = graphics.bloom;
+  applyLightingQuality(graphics);
   applyRenderScale(graphics.renderScale);
 }
 
@@ -944,6 +1272,10 @@ async function refreshSaveModalUI(slots) {
 }
 
 function saveCurrentGame(slot) {
+  if (isNetClient()) {
+    showNotification('Só o host pode salvar a partida.');
+    return;
+  }
   const runtime = getRuntimeSnapshot({
     worldTime, timeScale, wasDay, wolfRiskTimer, weedSpawnTimer, goalCheckTimer, lastGoalId, winterStreakBroken,
     playerX: player?.mesh.position.x ?? 0,
@@ -1040,15 +1372,6 @@ function setTimeScale(scale) {
   });
 }
 
-function toggleModal(id) {
-  const modal = document.getElementById(id);
-  modal.classList.toggle('hidden');
-  if (!modal.classList.contains('hidden')) exitPlayerPointerLock();
-  if (id === 'shop-modal' || id === 'inventory-modal') {
-    updateInventoryUI(state, sellCrop, sellProduct, selectActiveSeed);
-  }
-}
-
 function requireNear(targetPos, label) {
   if (!player || isInRange(player.mesh.position, targetPos, PLAYER_INTERACT_RANGE)) return true;
   showNotification(`Chegue mais perto ${label ? `de ${label}` : ''}.`);
@@ -1060,6 +1383,12 @@ async function tryUsePortal() {
   if (!player || isTransitioning()) return false;
   const portal = nearestPortal(player.mesh.position);
   if (!portal) return false;
+
+  if (isNetSession() && (portal.to === AREA.CAVE || portal.to === AREA.LAKE || portal.to === AREA.BASEMENT)) {
+    showNotification('Em multiplayer vocês ficam na fazenda. Caverna, lago e porão ficam para depois.');
+    playSfx('error');
+    return false;
+  }
 
   // A caverna não é mais uma área 3D — o portal abre o mini-game 2D por
   // cima, sem trocar currentArea (o jogador nunca "sai" da fazenda).
@@ -1341,48 +1670,83 @@ function handleAnimalInteract(animal) {
 }
 
 function attackWithEquippedWeapon() {
+  performAttack(player, state, camera, { localVfx: true, playerId: getLocalPlayerId() });
+}
+
+function performAttack(actor, bag, cam, opts = {}) {
   const now = Date.now();
-  const weapon = equippedWeapon(state);
-  if (player.reloading) return;
+  const weapon = equippedWeapon(bag);
+  if (actor.reloading) return;
+  const playerId = opts.playerId ?? getLocalPlayerId();
+  const isLocal = actor === player;
+
+  if (isNetClient() && isLocal) {
+    sendNetIntent({ kind: weapon.kind === 'ranged' ? 'fire' : 'melee' });
+    if (weapon.kind === 'ranged') {
+      if ((bag.mag[weapon.id] || 0) <= 0) {
+        if ((bag.ammo[weapon.id] || 0) > 0) performReloadFor(actor, bag);
+        else {
+          showNotification('Sem munição.');
+          playSfx('error');
+        }
+        return;
+      }
+      attackAnimTime = 0;
+      kickViewmodel(viewmodel, weapon.id === 'espingarda' ? 1.55 : 1.05);
+      playSfx('gunshot', { volume: weapon.id === 'espingarda' ? 1.15 : 0.9 });
+    } else {
+      attackAnimTime = 0;
+      kickViewmodel(viewmodel, 1);
+      playSfx('melee_swing');
+      spawnMeleeDust(vfxRoot(), actor.mesh.position.x, actor.mesh.position.y, actor.mesh.position.z);
+    }
+    return;
+  }
+
   if (weapon.kind === 'ranged') {
-    if ((state.mag[weapon.id] || 0) <= 0) {
-      if ((state.ammo[weapon.id] || 0) > 0) {
-        performReload(weapon);
-      } else {
+    if ((bag.mag[weapon.id] || 0) <= 0) {
+      if ((bag.ammo[weapon.id] || 0) > 0) {
+        performReloadFor(actor, bag);
+      } else if (isLocal) {
         showNotification('Sem munição.');
         playSfx('error');
       }
       return;
     }
-    const pellets = fireWeaponProjectiles(scene, player, camera, now, weapon);
+    const pellets = fireWeaponProjectiles(scene, actor, cam, now, weapon);
     if (pellets) {
-      consumeMagShot(state, weapon.id);
+      consumeMagShot(bag, weapon.id);
       arrows.push(...pellets);
-      attackAnimTime = 0;
-      kickViewmodel(viewmodel, weapon.id === 'espingarda' ? 1.55 : 1.05);
-      const origin = new THREE.Vector3();
-      camera.getWorldPosition(origin);
-      const dir = new THREE.Vector3();
-      camera.getWorldDirection(dir);
-      origin.addScaledVector(dir, 0.55);
-      spawnSmokePuff(vfxRoot(), origin.x, origin.y, origin.z, {
+      if (isLocal) {
+        attackAnimTime = 0;
+        kickViewmodel(viewmodel, weapon.id === 'espingarda' ? 1.55 : 1.05);
+      }
+      const origin = actor.mesh.position;
+      const y = origin.y + 1.4;
+      spawnSmokePuff(vfxRoot(), origin.x, y, origin.z, {
         count: weapon.id === 'espingarda' ? 8 : 4,
         scale: weapon.id === 'espingarda' ? 1.15 : 0.7,
         color: 0x8a8a82
       });
       playSfx('gunshot', { volume: weapon.id === 'espingarda' ? 1.15 : 0.9 });
-      updateWeaponHUD(state);
+      if (isLocal) updateWeaponHUD(bag);
+      if (isNetHost()) {
+        sendNetEvent({ kind: 'fire', playerId, weaponId: weapon.id, x: origin.x, y, z: origin.z });
+      }
     }
     return;
   }
 
-  const swing = beginMeleeSwing(player, weapon, now);
+  const swing = beginMeleeSwing(actor, weapon, now);
   if (!swing) return;
-  attackAnimTime = 0;
-  kickViewmodel(viewmodel, 1);
+  if (isLocal) {
+    attackAnimTime = 0;
+    kickViewmodel(viewmodel, 1);
+  }
   playSfx('melee_swing');
-  const pos = player.mesh.position;
+  const pos = actor.mesh.position;
   spawnMeleeDust(vfxRoot(), pos.x, pos.y, pos.z);
+  if (isNetHost()) sendNetEvent({ kind: 'swing', playerId, x: pos.x, y: pos.y, z: pos.z });
 }
 
 function tryReloadWeapon() {
@@ -1391,21 +1755,32 @@ function tryReloadWeapon() {
     tryRestAtHouse();
     return;
   }
-  performReload(weapon);
+  if (isNetClient()) {
+    sendNetIntent({ kind: 'reload' });
+  }
+  performReloadFor(player, state);
 }
 
 function performReload(weapon) {
-  if (player.reloading) return false;
-  const result = reloadWeapon(state, weapon.id);
+  return performReloadFor(player, state, weapon);
+}
+
+function performReloadFor(actor, bag, weapon = equippedWeapon(bag)) {
+  if (actor.reloading) return false;
+  const result = reloadWeapon(bag, weapon.id);
   if (!result.ok) {
-    showNotification(result.reason);
-    playSfx('error');
+    if (actor === player) {
+      showNotification(result.reason);
+      playSfx('error');
+    }
     return false;
   }
-  player.reloading = true;
-  player.reloadUntil = Date.now() + result.duration;
-  playSfx('reload');
-  showNotification('Recarregando...');
+  actor.reloading = true;
+  actor.reloadUntil = Date.now() + result.duration;
+  if (actor === player) {
+    playSfx('reload');
+    showNotification('Recarregando...');
+  }
   return true;
 }
 
@@ -1435,19 +1810,31 @@ function respawnWeaponPickups() {
 }
 
 function tryPickupNearbyWeapon() {
-  const pickup = nearestWeaponPickup(player.mesh.position, weaponPickups);
+  if (isNetClient()) {
+    sendNetIntent({ kind: 'pickup' });
+    return true;
+  }
+  return tryPickupFor(player, state, { broadcast: isNetHost(), playerId: getLocalPlayerId() });
+}
+
+function tryPickupFor(actor, bag, opts = {}) {
+  const pickup = nearestWeaponPickup(actor.mesh.position, weaponPickups);
   if (!pickup) return false;
   const id = pickup.userData.weaponId;
   const def = getWeaponDef(id);
-  if (!state.weaponsOwned) state.weaponsOwned = [];
-  if (!state.weaponsOwned.includes(id)) state.weaponsOwned.push(id);
-  tryEquipWeapon(id, true);
+  if (!bag.weaponsOwned) bag.weaponsOwned = [];
+  if (!bag.weaponsOwned.includes(id)) bag.weaponsOwned.push(id);
+  bag.equippedWeapon = def.id;
+  if (actor === player) {
+    tryEquipWeapon(id, true);
+    showNotification(`Pegou ${def.name}! Clique esquerdo para usar.`);
+    playSfx('harvest');
+    updateInventoryUI(state, sellCrop, sellProduct, selectActiveSeed);
+  }
   if (pickup.parent) pickup.parent.remove(pickup);
   const idx = weaponPickups.indexOf(pickup);
   if (idx >= 0) weaponPickups.splice(idx, 1);
-  showNotification(`Pegou ${def.name}! Clique esquerdo para usar.`);
-  playSfx('harvest');
-  updateInventoryUI(state, sellCrop, sellProduct, selectActiveSeed);
+  if (opts.broadcast) sendNetEvent({ kind: 'pickup', playerId: opts.playerId, weaponId: id });
   return true;
 }
 
@@ -1902,12 +2289,15 @@ function openGiftModal(npcId) {
 
   const addRow = (type, count, isProduct) => {
     if (count <= 0) return;
-    const row = document.createElement('div');
-    row.className = 'inv-row';
-    row.innerHTML = `<div><strong>${type}</strong><br><span class="inv-row-meta">Em estoque: ${count}</span></div>
-      <button class="gift-btn">Dar de presente</button>`;
-    row.querySelector('.gift-btn').addEventListener('click', () => giveGift(type, isProduct));
-    container.appendChild(row);
+    container.appendChild(renderInvRow({
+      title: type,
+      meta: `Em estoque: ${count}`,
+      actions: [{
+        className: 'gift-btn',
+        label: 'Dar de presente',
+        onClick: () => giveGift(type, isProduct)
+      }]
+    }));
   };
   Object.entries(state.harvested).forEach(([type, count]) => addRow(type, count, false));
   Object.entries(state.products).forEach(([type, count]) => addRow(type, count, true));
@@ -1916,7 +2306,7 @@ function openGiftModal(npcId) {
     container.innerHTML = '<p class="goal-hint">Você não tem itens para dar de presente.</p>';
   }
 
-  document.getElementById('gift-modal').classList.remove('hidden');
+  openModal('gift-modal');
 }
 
 function giveGift(itemType, isProduct) {
@@ -1924,7 +2314,7 @@ function giveGift(itemType, isProduct) {
   if (store[itemType] <= 0) return;
   store[itemType]--;
   applyFriendshipGain(giftTargetNpc, FRIENDSHIP_PER_GIFT);
-  document.getElementById('gift-modal').classList.add('hidden');
+  closeModal('gift-modal');
   updateInventoryUI(state, sellCrop, sellProduct, selectActiveSeed);
   showNotification('Presente entregue! Amizade aumentou.');
   playSfx('notification');
@@ -2093,6 +2483,28 @@ function updateEnemiesAndCombat(isDay, simDelta) {
   const isOpenWorldArea = areaId === AREA.FARM || areaId === AREA.VILLAGE || areaId === AREA.LAKE;
   if (!isOpenWorldArea) return;
 
+  if (isNetClient()) {
+    interpolateNetEnemies(enemies, simDelta, NET_SEND_INTERVAL);
+    const localPos = player.mesh.position;
+    enemies.forEach(enemy => {
+      if (enemy.state === 'dead') return;
+      enemy.sfxTimer = (enemy.sfxTimer || 0) - simDelta;
+      if (enemy.sfxTimer <= 0) {
+        const dist = Math.hypot(localPos.x - enemy.mesh.position.x, localPos.z - enemy.mesh.position.z);
+        const vol = Math.max(0.08, 1 - dist / 18);
+        enemy.sfxTimer = (enemy.state === 'chasing' || enemy.state === 'attacking')
+          ? 1.8 + Math.random() * 1.6
+          : 4.2 + Math.random() * 3.5;
+        playSfx(enemy.state === 'chasing' || enemy.state === 'attacking' ? 'zombie_agro' : 'zombie_idle', { volume: vol });
+      }
+    });
+    if (attackAnimTime != null) {
+      attackAnimTime += simDelta;
+      if (attackAnimTime >= ATTACK_ANIM_DURATION) attackAnimTime = null;
+    }
+    return;
+  }
+
   const livingCount = enemies.filter(e => e.state !== 'dead').length;
   if (!isDay) {
     if (livingCount < 3) {
@@ -2107,7 +2519,8 @@ function updateEnemiesAndCombat(isDay, simDelta) {
   }
 
   const safeZone = { x: HOUSE_POSITION.x, z: HOUSE_POSITION.z, radius: ENEMY_SAFE_ZONE_RADIUS };
-  const playerPos = player.mesh.position;
+  const targets = collectNetTargets();
+  const localPos = player.mesh.position;
   const aiArea = areaId === AREA.LAKE ? AREA.LAKE : AREA.FARM;
 
   enemies.slice().forEach(enemy => {
@@ -2116,12 +2529,12 @@ function updateEnemiesAndCombat(isDay, simDelta) {
       if (enemy.corpseLife <= 0) removeEnemy(scene, enemies, enemy);
       return;
     }
-    const event = updateEnemyAI(enemy, simDelta, playerPos, aiArea, safeZone, { crouched: !!player.crouched });
+    const event = updateEnemyAI(enemy, simDelta, targets, aiArea, safeZone);
     animateEnemy(enemy, simDelta);
 
     enemy.sfxTimer = (enemy.sfxTimer || 0) - simDelta;
     if (enemy.sfxTimer <= 0) {
-      const dist = Math.hypot(playerPos.x - enemy.mesh.position.x, playerPos.z - enemy.mesh.position.z);
+      const dist = Math.hypot(localPos.x - enemy.mesh.position.x, localPos.z - enemy.mesh.position.z);
       const vol = Math.max(0.08, 1 - dist / 18);
       enemy.sfxTimer = (enemy.state === 'chasing' || enemy.state === 'attacking')
         ? 1.8 + Math.random() * 1.6
@@ -2129,17 +2542,21 @@ function updateEnemiesAndCombat(isDay, simDelta) {
       playSfx(enemy.state === 'chasing' || enemy.state === 'attacking' ? 'zombie_agro' : 'zombie_idle', { volume: vol });
     }
 
-    if (event === 'attack') {
+    if (event === 'attack' || event?.type === 'attack') {
       playSfx('zombie_attack');
-      applyDamageToPlayer(enemy.damage);
+      applyDamageToPlayer(enemy.damage, event?.playerId ?? getLocalPlayerId());
     }
   });
 
-  const swing = updateMeleeSwing(player, enemies, simDelta);
-  if (swing.event?.type === 'hit') {
-    const killed = new Set(swing.event.result.killed);
-    swing.event.result.hits.forEach(enemy => onEnemyDamaged(enemy, killed.has(enemy)));
-  }
+  const swingers = [{ actor: player, cam: camera }];
+  hostedRemoteList().forEach(remote => swingers.push({ actor: remote.player, cam: null }));
+  swingers.forEach(({ actor, cam }) => {
+    const swing = updateMeleeSwing(actor, enemies, simDelta, cam);
+    if (swing.event?.type === 'hit') {
+      const killed = new Set(swing.event.result.killed);
+      swing.event.result.hits.forEach(enemy => onEnemyDamaged(enemy, killed.has(enemy)));
+    }
+  });
 
   const projectileHits = updateArrows(arrows, enemies, simDelta, scene);
   projectileHits.forEach(hit => onEnemyDamaged(hit.enemy, hit.died));
@@ -2155,7 +2572,9 @@ function updateEnemiesAndCombat(isDay, simDelta) {
 }
 
 function trySpawnEnemy(areaId) {
-  const playerPos = player.mesh.position;
+  const targets = collectNetTargets();
+  const focus = targets[Math.floor(Math.random() * Math.max(1, targets.length))] || { pos: player.mesh.position };
+  const playerPos = focus.pos;
   for (let attempt = 0; attempt < 5; attempt++) {
     const angle = Math.random() * Math.PI * 2;
     const dist = ENEMY_SPAWN_MIN_DIST_FROM_PLAYER + Math.random() * (ENEMY_SPAWN_MAX_DIST_FROM_PLAYER - ENEMY_SPAWN_MIN_DIST_FROM_PLAYER);
@@ -2176,16 +2595,33 @@ function trySpawnEnemy(areaId) {
   }
 }
 
-function applyDamageToPlayer(amount) {
+function applyDamageToPlayer(amount, playerId = getLocalPlayerId()) {
+  const found = actorForPlayerId(playerId);
+  const actor = found.actor;
+  const bag = found.bag;
   const now = Date.now();
-  if (now - (player.lastDamageTime || 0) < PLAYER_DAMAGE_INVULN_MS) return;
-  player.lastDamageTime = now;
+  const last = found.remote ? (found.remote.lastDamageTime || 0) : (actor.lastDamageTime || 0);
+  if (now - last < PLAYER_DAMAGE_INVULN_MS) return;
+  if (found.remote) found.remote.lastDamageTime = now;
+  else actor.lastDamageTime = now;
 
-  state.playerHealth = Math.max(0, state.playerHealth - amount);
-  applyZombieWound(state).forEach(note => showNotification(note));
-  updateHUD(state);
+  bag.playerHealth = Math.max(0, bag.playerHealth - amount);
+  const notes = applyZombieWound(bag);
+  if (found.isLocal) {
+    notes.forEach(note => showNotification(note));
+    updateHUD(state);
+    playLocalDamageFeedback(amount);
+  }
+  if (isNetHost() && !found.isLocal) {
+    sendNetEvent({ kind: 'damage', playerId, amount });
+    const pos = actor.mesh.position;
+    spawnBlood(vfxRoot(), pos.x, pos.y, pos.z, { death: false, count: 6, fromHeight: 1.2 });
+  }
+  if (bag.playerHealth <= 0) handlePlayerDeath(playerId);
+}
+
+function playLocalDamageFeedback(amount) {
   playSfx('error');
-
   const pos = player.mesh.position;
   const look = getLookDirection(player, camera);
   spawnBlood(vfxRoot(), pos.x, pos.y, pos.z, {
@@ -2194,28 +2630,48 @@ function applyDamageToPlayer(amount) {
     fromHeight: 1.2,
     dir: { x: -look.x, y: 0.2, z: -look.z }
   });
-
   const flashEl = document.getElementById('damage-flash');
   flashEl.classList.add('active');
   setTimeout(() => flashEl.classList.remove('active'), 120);
-
-  if (state.playerHealth <= 0) handlePlayerDeath();
 }
 
-function handlePlayerDeath() {
-  enemies.slice().forEach(e => removeEnemy(scene, enemies, e));
-  clearBlood(farmRoot);
-  if (lakeRoot) clearBlood(lakeRoot);
+function handlePlayerDeath(playerId = getLocalPlayerId()) {
+  const net = isNetSession();
+  if (!net) {
+    enemies.slice().forEach(e => removeEnemy(scene, enemies, e));
+    clearBlood(farmRoot);
+    if (lakeRoot) clearBlood(lakeRoot);
+  }
 
-  state.playerHealth = state.playerMaxHealth;
-  state.energy = Math.max(0, state.energy - PLAYER_RESPAWN_ENERGY_PENALTY);
-  state.bleeding = false;
-  state.infected = false;
-  state.hunger = Math.max(35, state.hunger || 100);
-  state.thirst = Math.max(35, state.thirst || 100);
-  const moneyPenalty = Math.min(PLAYER_RESPAWN_MONEY_PENALTY_CAP, Math.round(state.money * PLAYER_RESPAWN_MONEY_PENALTY_PCT));
-  state.money = Math.max(0, state.money - moneyPenalty);
+  const found = actorForPlayerId(playerId);
+  const bag = found.bag;
+  const actor = found.actor;
+  bag.playerHealth = bag.playerMaxHealth;
+  bag.energy = Math.max(0, bag.energy - PLAYER_RESPAWN_ENERGY_PENALTY);
+  bag.bleeding = false;
+  bag.infected = false;
+  bag.hunger = Math.max(35, bag.hunger || 100);
+  bag.thirst = Math.max(35, bag.thirst || 100);
+  let moneyPenalty = 0;
+  if (found.isLocal || !net) {
+    moneyPenalty = Math.min(PLAYER_RESPAWN_MONEY_PENALTY_CAP, Math.round(state.money * PLAYER_RESPAWN_MONEY_PENALTY_PCT));
+    state.money = Math.max(0, state.money - moneyPenalty);
+  }
 
+  const respawnX = HOUSE_POSITION.x;
+  const respawnZ = HOUSE_POSITION.z - 2;
+  if (found.isLocal) applyLocalRespawn();
+  else setPlayerPosition(actor, respawnX, respawnZ);
+
+  if (isNetHost()) sendNetEvent({ kind: 'death', playerId, moneyPenalty });
+  if (found.isLocal) {
+    updateHUD(state);
+    showDialogue('Fazendeiro', 'Os zumbis te derrubaram... Você acordou em casa. Pegue uma arma e tome cuidado na noite.');
+    showNotification(`Desmaiou! -${PLAYER_RESPAWN_ENERGY_PENALTY} energia${moneyPenalty ? `, -R$ ${moneyPenalty}` : ''}.`);
+  }
+}
+
+function applyLocalRespawn() {
   if (getCurrentArea() !== AREA.FARM) {
     forceArea(AREA.FARM, () => {
       setPlayerPosition(player, HOUSE_POSITION.x, HOUSE_POSITION.z - 2);
@@ -2224,10 +2680,6 @@ function handlePlayerDeath() {
   } else {
     setPlayerPosition(player, HOUSE_POSITION.x, HOUSE_POSITION.z - 2);
   }
-
-  updateHUD(state);
-  showDialogue('Fazendeiro', 'Os zumbis te derrubaram... Você acordou em casa. Pegue uma arma e tome cuidado na noite.');
-  showNotification(`Desmaiou! -${PLAYER_RESPAWN_ENERGY_PENALTY} energia, -R$ ${moneyPenalty}.`);
 }
 
 function animate() {
@@ -2268,22 +2720,29 @@ function animate() {
     return; // Three.js não renderiza neste frame — economiza GPU.
   }
 
-  if (appState !== APP_STATE.PLAYING) {
+  pumpNet();
+
+  const netPlaying = isNetSession() && (appState === APP_STATE.PLAYING || appState === APP_STATE.PAUSED);
+  if (appState !== APP_STATE.PLAYING && !netPlaying) {
     if (player) updateFollowCamera(camera, player, controls, delta);
     else controls.update();
     composer.render();
     return;
   }
 
+  const localPaused = appState === APP_STATE.PAUSED;
+  if (isNetClient() && player && !localPaused) tickNetSend(delta, player);
+
   let moving = false;
-  if (!isTransitioning()) {
+  if (!isTransitioning() && !localPaused) {
     const blockers = [
       ...enemies.filter(e => e.state !== 'dead').map(e => ({
         x: e.mesh.position.x, z: e.mesh.position.z, radius: e.type === 'ZumbiBruto' ? 0.48 : 0.36
       })),
       ...villageNpcs().filter(n => n.visible !== false).map(n => ({
         x: n.position.x, z: n.position.z, radius: n.userData.dead ? 0.28 : 0.34
-      }))
+      })),
+      ...getRemoteBumpEntities(getLocalPlayerId())
     ];
     moving = updatePlayerMovement(player, delta, (cost) => {
       if (state.energy > 0) {
@@ -2303,6 +2762,24 @@ function animate() {
       spawnDust(vfxRoot(), pos.x, pos.y, pos.z, { count: 8, burst: true, spread: 0.45, color: 0x6a5a40 });
     }
   }
+  if (isNetHost()) {
+    hostedRemoteList().forEach(remote => {
+      const bumps = [
+        ...enemies.filter(e => e.state !== 'dead').map(e => ({
+          x: e.mesh.position.x, z: e.mesh.position.z, radius: e.type === 'ZumbiBruto' ? 0.48 : 0.36
+        })),
+        { x: player.mesh.position.x, z: player.mesh.position.z, radius: 0.34 },
+        ...getRemoteBumpEntities(remote.id)
+      ];
+      updatePlayerMovement(remote.player, delta, (cost) => {
+        if (remote.bag.energy > 0) remote.bag.energy = Math.max(0, remote.bag.energy - cost);
+      }, bumps, { energyRatio: remote.bag.energy / Math.max(1, remote.bag.maxEnergy || 100) });
+      if (remote.player.reloading && Date.now() >= (remote.player.reloadUntil || 0)) {
+        remote.player.reloading = false;
+      }
+    });
+  }
+  updateInterpRemotes(delta);
   updateFollowCamera(camera, player, controls, delta);
 
   const fishResult = updateFishing(state, Date.now());
@@ -2335,10 +2812,16 @@ function animate() {
     showNotification('Pronto.');
   }
 
-  const survivalEvents = tickSurvival(state, simDelta);
-  if (survivalEvents.includes('dot')) {
-    updateHUD(state);
-    if (state.playerHealth <= 0) handlePlayerDeath();
+  if (!isNetClient()) {
+    const survivalEvents = tickSurvival(state, simDelta);
+    if (survivalEvents.includes('dot')) {
+      updateHUD(state);
+      if (state.playerHealth <= 0) handlePlayerDeath(getLocalPlayerId());
+    }
+    hostedRemoteList().forEach(remote => {
+      const events = tickSurvival(remote.bag, simDelta);
+      if (events.includes('dot') && remote.bag.playerHealth <= 0) handlePlayerDeath(remote.id);
+    });
   }
 
   const onFarm = getCurrentArea() === AREA.FARM;
@@ -2353,13 +2836,14 @@ function animate() {
     delta: simDelta
   });
 
-  worldTime = (worldTime + simDelta * 7) % 1440;
-  if (worldTime >= 5 * 60 && worldTime < 20 * 60) worldTime = 20 * 60;
+  if (!isNetClient()) {
+    worldTime = (worldTime + simDelta * 7) % 1440;
+    if (worldTime >= 5 * 60 && worldTime < 20 * 60) worldTime = 20 * 60;
+  }
   const hours = Math.floor(worldTime / 60);
   const minutes = Math.floor(worldTime % 60);
   const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
   const isDay = false;
-  const isDawnDusk = false;
 
   const npcChair = houseGroup.userData.npc;
   const sleepIndicator = houseGroup.userData.sleepIndicator;
@@ -2408,72 +2892,20 @@ function animate() {
   document.getElementById('time-display').textContent = timeStr;
   document.getElementById('time-icon').innerHTML = svgIcon(isDay ? 'sun' : 'moon');
 
-  const sunAngle = (worldTime / 1440) * Math.PI * 2 - Math.PI / 2;
-  const sunHeight = Math.sin(sunAngle);
-  const dayFactor = THREE.MathUtils.clamp((sunHeight + 0.15) / 0.35, 0, 1);
-  sunLight.position.set(Math.cos(sunAngle) * 45, Math.max(sunHeight, -0.15) * 45 + 5, 15);
-  moonLight.position.set(-Math.cos(sunAngle) * 45, Math.max(-sunHeight, -0.15) * 45 + 5, -15);
-
-  // Sol / lua visíveis no céu (escala grande, longe da fazenda)
-  if (sunMesh) {
-    const skyDist = 118;
-    sunMesh.position.set(
-      Math.cos(sunAngle) * skyDist,
-      Math.max(sunHeight, 0.02) * skyDist * 0.72 + 18,
-      28
-    );
-    sunMesh.visible = dayFactor > 0.05;
-    sunMesh.rotation.y += simDelta * 0.15;
-    const sunScale = THREE.MathUtils.lerp(0.7, 1.15, dayFactor);
-    sunMesh.scale.setScalar(sunScale * (isDawnDusk ? 1.2 : 1));
-  }
-  if (moonMesh) {
-    const skyDist = 110;
-    moonMesh.position.set(
-      -Math.cos(sunAngle) * skyDist,
-      Math.max(-sunHeight, 0.02) * skyDist * 0.72 + 16,
-      -22
-    );
-    moonMesh.visible = dayFactor < 0.85;
-    moonMesh.scale.setScalar(THREE.MathUtils.lerp(1.1, 0.4, dayFactor));
-  }
-
-  sunLight.intensity = THREE.MathUtils.lerp(0.05, isDawnDusk ? 2.55 : 3.2, dayFactor);
-  sunLight.color.setHex(isDawnDusk ? 0xffb06a : 0xfff0c8);
-  moonLight.intensity = THREE.MathUtils.lerp(1.15 + Math.sin(simTime * 0.12) * 0.18, 0, dayFactor);
-  ambientLight.intensity = THREE.MathUtils.lerp(0.16, 0.38, dayFactor);
-  hemiLight.intensity = THREE.MathUtils.lerp(0.22, 0.48, dayFactor);
-  fillLight.intensity = THREE.MathUtils.lerp(0.12, 0.28, dayFactor);
-
-  const seasonSky = skyPaletteForSeason(state.season);
-  const nightTop = new THREE.Color(0x06101c);
-  const nightBottom = new THREE.Color(0x121820);
-  const skyTop = new THREE.Color(isDawnDusk ? 0xe6853e : seasonSky.top).lerp(nightTop, 1 - dayFactor);
-  const skyBottom = new THREE.Color(isDawnDusk ? 0xffd49a : seasonSky.bottom).lerp(nightBottom, 1 - dayFactor);
-  skyUniforms.topColor.value.lerp(skyTop, 0.05);
-  skyUniforms.bottomColor.value.lerp(skyBottom, 0.05);
-  scene.fog.color.copy(skyUniforms.bottomColor.value);
-  const fogDay = 0.0025;
-  const fogDusk = 0.0048;
-  const fogNight = 0.0155 + Math.sin(simTime * 0.18) * 0.0035;
-  const fogTarget = (isDawnDusk
-    ? THREE.MathUtils.lerp(fogNight, fogDusk, dayFactor)
-    : THREE.MathUtils.lerp(fogNight, fogDay, dayFactor)) * weatherFogMul();
-  scene.fog.density = THREE.MathUtils.damp(scene.fog.density, fogTarget, 1.2, simDelta);
-
-  // Contraste de exposição no ciclo (amanhecer/pôr do sol mais quente)
-  renderer.toneMappingExposure = THREE.MathUtils.lerp(0.78, isDawnDusk ? 1.22 : 1.18, dayFactor);
-
-  // Olhos espreitando na mata e lampião da varanda só aparecem/acendem à noite
-  if (treesGroup && treesGroup.userData.eyesGroup) {
-    treesGroup.userData.eyesGroup.visible = dayFactor < 0.15;
-  }
-  const lantern = houseGroup.userData.lantern;
-  if (lantern) {
-    const nightGlow = 1 - dayFactor;
-    lantern.light.intensity = THREE.MathUtils.lerp(0, 2.4, nightGlow);
-    lantern.glassMat.emissiveIntensity = THREE.MathUtils.lerp(0, 1.6, nightGlow);
-  }
+  updateLighting({
+    worldTime,
+    simTime,
+    simDelta,
+    season: state.season,
+    weatherMul: weatherFogMul(),
+    followPos: player?.mesh?.position,
+    treesEyes: treesGroup?.userData?.eyesGroup || null,
+    sunMesh,
+    moonMesh,
+    skyUniforms,
+    scene,
+    renderer
+  });
 
   // Transição dia/noite controla soltar/prender: ao amanhecer os animais saem
   // do curral; ao anoitecer, os que ainda estiverem fora ficam em risco do lobo.
@@ -2541,6 +2973,13 @@ function animate() {
   if (wolf.visible) updateWolfPatrol(wolf, simDelta, simTime);
 
   updateEnemiesAndCombat(isDay, simDelta);
+  if (isNetHost()) {
+    netSnapAccum += delta;
+    if (netSnapAccum >= NET_SEND_INTERVAL) {
+      netSnapAccum = 0;
+      hostBroadcastSnapshot();
+    }
+  }
   const fxRoot = vfxRoot();
   updateBlood(simDelta, fxRoot);
   updateParticles(simDelta, fxRoot, { wind: windSystem, playerPos: player?.mesh?.position });

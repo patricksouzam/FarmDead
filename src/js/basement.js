@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { voxelBox, voxelMat } from './voxel.js';
 import { registerObstaclePublic, BASEMENT_POSITION, BASEMENT_EXIT_SPAWN } from './world.js';
+import { createLantern } from './lighting.js';
 
 export const BASEMENT_INTERACT_RANGE = 1.6;
 
@@ -23,7 +24,6 @@ const LORE_NOTES = [
 ];
 
 let loreNoteEntries = [];
-let overlayEl = null;
 
 export function createBasement(parent) {
   const group = new THREE.Group();
@@ -70,7 +70,7 @@ export function createBasement(parent) {
   const lantern = voxelBox(0.2, 0.26, 0.2, lanternGlassMat);
   lantern.position.set(0, height - 0.35, -depth / 2 + 0.5);
   group.add(lantern);
-  const lanternLight = new THREE.PointLight(0xffb45a, 1.4, 8, 1.8);
+  const { light: lanternLight } = createLantern({ color: 0xffb45a, intensity: 1.4, range: 8, decay: 1.8 });
   lanternLight.position.copy(lantern.position);
   group.add(lanternLight);
 
@@ -134,63 +134,21 @@ export function getLoreNotes() {
   return loreNoteEntries;
 }
 
-function ensureOverlayEl() {
-  if (overlayEl) return overlayEl;
-  overlayEl = document.createElement('div');
-  overlayEl.id = 'lore-note-overlay';
-  Object.assign(overlayEl.style, {
-    position: 'fixed',
-    inset: '0',
-    zIndex: '300',
-    display: 'none',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'rgba(5, 6, 10, 0.72)',
-    pointerEvents: 'none'
-  });
-  const card = document.createElement('div');
-  card.id = 'lore-note-card';
-  Object.assign(card.style, {
-    maxWidth: '420px',
-    padding: '22px 26px',
-    borderRadius: '10px',
-    background: '#1a160f',
-    border: '1px solid #4a3a22',
-    color: '#e8d8b0',
-    fontFamily: 'inherit',
-    boxShadow: '0 12px 32px rgba(0,0,0,0.5)'
-  });
-  const title = document.createElement('h3');
-  title.id = 'lore-note-title';
-  Object.assign(title.style, { margin: '0 0 10px', fontSize: '16px', letterSpacing: '0.02em' });
-  const body = document.createElement('p');
-  body.id = 'lore-note-body';
-  Object.assign(body.style, { margin: '0 0 12px', fontSize: '14px', lineHeight: '1.5' });
-  const hint = document.createElement('span');
-  hint.textContent = 'E ou ESC para fechar';
-  Object.assign(hint.style, { fontSize: '11px', opacity: '0.6' });
-  card.appendChild(title);
-  card.appendChild(body);
-  card.appendChild(hint);
-  overlayEl.appendChild(card);
-  document.body.appendChild(overlayEl);
-  return overlayEl;
-}
-
 export function showLoreNote(def) {
-  const el = ensureOverlayEl();
-  el.querySelector('#lore-note-title').textContent = def.title;
-  el.querySelector('#lore-note-body').textContent = def.text;
-  el.style.display = 'flex';
-  el.style.pointerEvents = 'auto';
+  const el = document.getElementById('lore-note-overlay');
+  const title = document.getElementById('lore-note-title');
+  const body = document.getElementById('lore-note-body');
+  if (!el || !title || !body) return;
+  title.textContent = def.title;
+  body.textContent = def.text;
+  el.classList.remove('hidden');
 }
 
 export function hideLoreNote() {
-  if (!overlayEl) return;
-  overlayEl.style.display = 'none';
-  overlayEl.style.pointerEvents = 'none';
+  document.getElementById('lore-note-overlay')?.classList.add('hidden');
 }
 
 export function isLoreNoteOpen() {
-  return !!overlayEl && overlayEl.style.display === 'flex';
+  const el = document.getElementById('lore-note-overlay');
+  return !!el && !el.classList.contains('hidden');
 }
