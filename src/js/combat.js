@@ -3,10 +3,14 @@ import { voxelBox, voxelMat } from './voxel.js';
 import { avoidObstacles } from './world.js';
 import { damageEnemy } from './enemies.js';
 import { getWeaponDef } from './weapons.js';
-import { getLookDirection } from './player.js';
+import { getLookDirection, PLAYER_EYE_HEIGHT } from './player.js';
+import { PLAYER_MELEE_ARC_DEG } from './gameState.js';
+import { getCurrentArea } from './areas.js';
+import {
+  worldCapsule, closestPointOnCapsule, segmentHitsCapsule, hitboxForEnemyType
+} from './hitbox.js';
 
-const DEFAULT_ARC_COS = Math.cos(THREE.MathUtils.degToRad(62));
-const PROJECTILE_HIT_RADIUS = 0.75;
+const MELEE_ARC_COS = Math.cos(THREE.MathUtils.degToRad(PLAYER_MELEE_ARC_DEG * 0.5));
 
 export function equippedWeapon(state) {
   return getWeaponDef(state.equippedWeapon || 'fists');
@@ -35,43 +39,74 @@ export function beginMeleeSwing(player, weapon, now) {
   return player.meleeSwing;
 }
 
-function collectMeleeTargets(player, enemies, weapon) {
-  const look = getLookDirection(player);
-  const forward = { x: look.x, z: look.z };
-  const flen = Math.hypot(forward.x, forward.z) || 1;
-  forward.x /= flen;
-  forward.z /= flen;
+function meleeOrigin(player, camera) {
+  if (camera) {
+    const origin = new THREE.Vector3();
+    camera.getWorldPosition(origin);
+    return origin;
+  }
+  const crouched = player.crouched ? 0.62 : 1;
+  return new THREE.Vector3(
+    player.mesh.position.x,
+    player.mesh.position.y + PLAYER_EYE_HEIGHT * crouched,
+    player.mesh.position.z
+  );
+}
+
+function enemyCapsule(enemy) {
+  return worldCapsule(enemy.mesh.position, enemy.hitbox || hitboxForEnemyType(enemy.type));
+}
+
+function collectMeleeTargets(player, enemies, weapon, camera) {
+  const look = getLookDirection(player, camera);
+  const lookLen = Math.hypot(look.x, look.y, look.z) || 1;
+  const lx = look.x / lookLen;
+  const ly = look.y / lookLen;
+  const lz = look.z / lookLen;
+  const eye = meleeOrigin(player, camera);
 
   const hits = [];
   for (const enemy of enemies) {
     if (enemy.state === 'dead') continue;
-    const dx = enemy.mesh.position.x - player.mesh.position.x;
-    const dz = enemy.mesh.position.z - player.mesh.position.z;
-    const dist = Math.hypot(dx, dz);
+    const hb = enemy.hitbox || hitboxForEnemyType(enemy.type);
+    const cap = enemyCapsule(enemy);
+    const closest = closestPointOnCapsule(eye.x, eye.y, eye.z, cap);
+    const dx = closest.x - eye.x;
+    const dy = closest.y - eye.y;
+    const dz = closest.z - eye.z;
+    const rawDist = Math.hypot(dx, dy, dz);
+    const dist = rawDist - hb.radius;
     if (dist > weapon.range) continue;
-    const dot = (dx / (dist || 1)) * forward.x + (dz / (dist || 1)) * forward.z;
-    if (dot < DEFAULT_ARC_COS) continue;
-    hits.push({ enemy, dist, dx, dz });
+    const nd = rawDist || 1;
+    const dot = (dx / nd) * lx + (dy / nd) * ly + (dz / nd) * lz;
+    if (dot < MELEE_ARC_COS) continue;
+    hits.push({
+      enemy,
+      dist: Math.max(0, dist),
+      dx: enemy.mesh.position.x - player.mesh.position.x,
+      dz: enemy.mesh.position.z - player.mesh.position.z
+    });
   }
   hits.sort((a, b) => a.dist - b.dist);
   return hits;
 }
 
-export function resolveMeleeHit(player, enemies, weapon) {
+export function resolveMeleeHit(player, enemies, weapon, camera) {
   const def = weapon || getWeaponDef('fists');
-  const hits = collectMeleeTargets(player, enemies, def);
+  const hits = collectMeleeTargets(player, enemies, def, camera);
   if (!hits.length) return { hits: [], killed: [] };
 
   const killed = [];
   const applied = [];
   const maxHits = def.id === 'machado' ? 3 : 2;
+  const areaId = getCurrentArea();
   for (const hit of hits.slice(0, maxHits)) {
     const died = damageEnemy(hit.enemy, def.damage);
     const push = 1.15 + (def.id === 'machado' ? 0.55 : 0.2);
     const len = Math.hypot(hit.dx, hit.dz) || 1;
     hit.enemy.mesh.position.x += (hit.dx / len) * push;
     hit.enemy.mesh.position.z += (hit.dz / len) * push;
-    const cleared = avoidObstacles(hit.enemy.mesh.position.x, hit.enemy.mesh.position.z, 0.4, 'farm');
+    const cleared = avoidObstacles(hit.enemy.mesh.position.x, hit.enemy.mesh.position.z, 0.4, areaId);
     hit.enemy.mesh.position.x = cleared.x;
     hit.enemy.mesh.position.z = cleared.z;
     hit.enemy.stagger = 0.28;
@@ -81,7 +116,7 @@ export function resolveMeleeHit(player, enemies, weapon) {
   return { hits: applied, killed };
 }
 
-export function updateMeleeSwing(player, enemies, delta) {
+export function updateMeleeSwing(player, enemies, delta, camera) {
   const swing = player.meleeSwing;
   if (!swing) return { progress: 0, event: null };
   swing.elapsed += delta;
@@ -89,7 +124,7 @@ export function updateMeleeSwing(player, enemies, delta) {
   let event = null;
   if (!swing.didHit && swing.elapsed >= swing.hitAt) {
     swing.didHit = true;
-    event = { type: 'hit', result: resolveMeleeHit(player, enemies, swing.weapon) };
+    event = { type: 'hit', result: resolveMeleeHit(player, enemies, swing.weapon, camera) };
   }
   if (swing.elapsed >= swing.duration) {
     player.meleeSwing = null;
@@ -109,9 +144,19 @@ export function fireWeaponProjectiles(scene, player, camera, now, weapon) {
   player.attackCooldownUntil = now + def.cooldown;
 
   const origin = new THREE.Vector3();
-  camera.getWorldPosition(origin);
   const baseDir = new THREE.Vector3();
-  camera.getWorldDirection(baseDir);
+  if (camera) {
+    camera.getWorldPosition(origin);
+    camera.getWorldDirection(baseDir);
+  } else {
+    baseDir.copy(getLookDirection(player, null));
+    const crouched = player.crouched ? 0.62 : 1;
+    origin.set(
+      player.mesh.position.x,
+      player.mesh.position.y + PLAYER_EYE_HEIGHT * crouched,
+      player.mesh.position.z
+    );
+  }
   origin.addScaledVector(baseDir, 0.45);
 
   const pellets = [];
@@ -152,6 +197,7 @@ export function updateArrows(arrows, enemies, delta, scene) {
   const events = [];
   for (let i = arrows.length - 1; i >= 0; i--) {
     const arrow = arrows[i];
+    const prev = arrow.mesh.position.clone();
     const step = arrow.speed * delta;
     arrow.mesh.position.addScaledVector(arrow.dir, step);
     arrow.traveled += step;
@@ -159,10 +205,12 @@ export function updateArrows(arrows, enemies, delta, scene) {
     let hit = false;
     for (const enemy of enemies) {
       if (enemy.state === 'dead') continue;
-      const enemyPos = enemy.mesh.position.clone();
-      enemyPos.y += 0.9;
-      if (arrow.mesh.position.distanceTo(enemyPos) < PROJECTILE_HIT_RADIUS
-        || arrow.mesh.position.distanceTo(enemy.mesh.position) < PROJECTILE_HIT_RADIUS + 0.35) {
+      const cap = enemyCapsule(enemy);
+      if (segmentHitsCapsule(
+        prev.x, prev.y, prev.z,
+        arrow.mesh.position.x, arrow.mesh.position.y, arrow.mesh.position.z,
+        cap
+      )) {
         const died = damageEnemy(enemy, arrow.damage ?? 14);
         events.push({ enemy, died, position: enemy.mesh.position.clone() });
         hit = true;

@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
+const { registerIpc: registerNetIpc, closeAll: closeNet } = require('./netIpc');
 const DEBUG_ENDPOINT = 'http://127.0.0.1:7299/ingest/8bc68156-38f8-493e-9aa8-401dffdaa1b4';
 const DEBUG_SESSION_ID = '9196a3';
 
@@ -159,6 +160,8 @@ function createWindow() {
   win.loadFile(htmlPath);
 }
 
+registerNetIpc();
+
 app.whenReady().then(() => {
   // #region agent log
   debugLog('H6', 'electron.app.whenReady');
@@ -168,6 +171,10 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+app.on('before-quit', () => {
+  closeNet();
 });
 
 app.on('window-all-closed', () => {

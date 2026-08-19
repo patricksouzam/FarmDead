@@ -5,6 +5,129 @@ import { ensureSurvival } from './survival.js';
 import { getWeaponDef } from './weapons.js';
 import { PAST_STORY_ENABLED } from './featureFlags.js';
 
+const FLOW_MODAL_IDS = new Set(['title-screen', 'pause-menu', 'settings-modal', 'confirm-modal', 'join-modal']);
+const modalStack = [];
+
+function modalEl(id) {
+  return document.getElementById(id);
+}
+
+export function isModalOpen(id) {
+  const el = modalEl(id);
+  return !!el && !el.classList.contains('hidden');
+}
+
+export function openModal(id) {
+  const el = modalEl(id);
+  if (!el) return false;
+  el.classList.remove('hidden');
+  if (!modalStack.includes(id)) modalStack.push(id);
+  return true;
+}
+
+export function closeModal(id) {
+  const el = modalEl(id);
+  if (!el) return false;
+  el.classList.add('hidden');
+  const i = modalStack.lastIndexOf(id);
+  if (i >= 0) modalStack.splice(i, 1);
+  return true;
+}
+
+export function toggleModal(id) {
+  if (isModalOpen(id)) {
+    closeModal(id);
+    return false;
+  }
+  openModal(id);
+  return true;
+}
+
+export function closeTopModal() {
+  for (let i = modalStack.length - 1; i >= 0; i--) {
+    const id = modalStack[i];
+    if (FLOW_MODAL_IDS.has(id)) continue;
+    closeModal(id);
+    return id;
+  }
+  const open = document.querySelector(
+    '.modal:not(.hidden):not(#title-screen):not(#pause-menu):not(#confirm-modal):not(#settings-modal):not(#join-modal)'
+  );
+  if (open) {
+    closeModal(open.id);
+    return open.id;
+  }
+  return null;
+}
+
+export function isAnyGameModalOpen() {
+  if (modalStack.some(id => !FLOW_MODAL_IDS.has(id) && isModalOpen(id))) return true;
+  return !!document.querySelector(
+    '.modal:not(.hidden):not(#title-screen):not(#pause-menu):not(#confirm-modal):not(#settings-modal):not(#join-modal)'
+  );
+}
+
+export function closeAllModalsExcept(keepId) {
+  document.querySelectorAll('.modal').forEach(el => {
+    if (el.id !== keepId) el.classList.add('hidden');
+  });
+  modalStack.length = 0;
+  if (keepId) modalStack.push(keepId);
+}
+
+export function bindModalCloses() {
+  document.querySelectorAll('[data-close]').forEach(btn => {
+    btn.addEventListener('click', () => closeModal(btn.dataset.close));
+  });
+}
+
+export function bindUiClicks(map) {
+  for (const [id, handler] of Object.entries(map)) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', handler);
+  }
+}
+
+export function renderInvRow({ title, meta, actions = [] } = {}) {
+  const row = document.createElement('div');
+  row.className = 'inv-row';
+  const info = document.createElement('div');
+  const strong = document.createElement('strong');
+  strong.textContent = title ?? '';
+  info.appendChild(strong);
+  if (meta) {
+    info.appendChild(document.createElement('br'));
+    const span = document.createElement('span');
+    span.className = 'inv-row-meta';
+    span.textContent = meta;
+    info.appendChild(span);
+  }
+  row.appendChild(info);
+  if (!actions.length) return row;
+
+  const host = actions.length > 1 ? document.createElement('div') : row;
+  if (actions.length > 1) {
+    host.className = 'inv-row-actions';
+    row.appendChild(host);
+  }
+  for (const action of actions) {
+    const btn = document.createElement('button');
+    if (action.className) btn.className = action.className;
+    btn.textContent = action.label;
+    if (action.disabled) btn.disabled = true;
+    if (action.onClick) btn.addEventListener('click', action.onClick);
+    host.appendChild(btn);
+  }
+  return row;
+}
+
+export function updateNetHud({ visible = false, text = '' } = {}) {
+  const el = document.getElementById('net-hud');
+  if (!el) return;
+  el.classList.toggle('hidden', !visible);
+  if (text) el.textContent = text;
+}
+
 export function updateHUD(state) {
   document.getElementById('money-display').textContent = `R$ ${state.money}`;
   document.getElementById('water-display').textContent = `${state.water} / ${state.maxWater}`;
@@ -101,32 +224,30 @@ export function updateInventoryUI(state, onSell, onSellProduct, onSelectSeed) {
     const seedCount = state.seeds[type];
     const sellPrice = Math.round(state.seedConfigs[type].sell * (1 + bonus));
     const isActive = type === state.activeSeedType;
-
-    const row = document.createElement('div');
-    row.className = 'inv-row';
-    row.innerHTML = `
-      <div>
-        <strong>${type}</strong><br>
-        <span class="inv-row-meta">Colhidos: ${count} | Sementes: ${seedCount}</span>
-      </div>
-      <div class="inv-row-actions">
-        <button class="use-btn" ${isActive || seedCount === 0 ? 'disabled' : ''}>${isActive ? 'Semente ativa' : 'Usar'}</button>
-        <button class="sell-btn" ${count === 0 ? 'disabled' : ''}>Vender (R$ ${sellPrice})</button>
-      </div>
-    `;
-    row.querySelector('.sell-btn').addEventListener('click', () => onSell(type));
-    if (onSelectSeed) row.querySelector('.use-btn').addEventListener('click', () => onSelectSeed(type));
-    container.appendChild(row);
+    container.appendChild(renderInvRow({
+      title: type,
+      meta: `Colhidos: ${count} | Sementes: ${seedCount}`,
+      actions: [
+        {
+          className: 'use-btn',
+          label: isActive ? 'Semente ativa' : 'Usar',
+          disabled: isActive || seedCount === 0,
+          onClick: onSelectSeed ? () => onSelectSeed(type) : null
+        },
+        {
+          className: 'sell-btn',
+          label: `Vender (R$ ${sellPrice})`,
+          disabled: count === 0,
+          onClick: () => onSell(type)
+        }
+      ]
+    }));
   }
 
-  const feedRow = document.createElement('div');
-  feedRow.className = 'inv-row';
-  feedRow.innerHTML = `
-    <div>
-      <strong>Ração</strong><br>
-      <span class="inv-row-meta">Em estoque: ${state.feed || 0} — botão Ração + E no animal</span>
-    </div>`;
-  container.appendChild(feedRow);
+  container.appendChild(renderInvRow({
+    title: 'Ração',
+    meta: `Em estoque: ${state.feed || 0} — botão Ração + E no animal`
+  }));
 
   if (!onSellProduct) {
     updateCraftLabels(state);
@@ -139,17 +260,15 @@ export function updateInventoryUI(state, onSell, onSellProduct, onSelectSeed) {
       ? Math.round(state.animalConfigs[animalType].sell * (1 + bonus))
       : (type === YARN_GIFT_RECIPE.productKey ? 40 : 10);
 
-    const row = document.createElement('div');
-    row.className = 'inv-row';
-    row.innerHTML = `
-      <div>
-        <strong>${type}</strong><br>
-        <span class="inv-row-meta">Em estoque: ${count}</span>
-      </div>
-      <button ${count === 0 ? 'disabled' : ''}>Vender (R$ ${basePrice})</button>
-    `;
-    row.querySelector('button').addEventListener('click', () => onSellProduct(type));
-    container.appendChild(row);
+    container.appendChild(renderInvRow({
+      title: type,
+      meta: `Em estoque: ${count}`,
+      actions: [{
+        label: `Vender (R$ ${basePrice})`,
+        disabled: count === 0,
+        onClick: () => onSellProduct(type)
+      }]
+    }));
   }
 
   if (state.materials) {
@@ -157,32 +276,25 @@ export function updateInventoryUI(state, onSell, onSellProduct, onSelectSeed) {
       const count = state.materials[type] || 0;
       const base = type === 'Minerio' ? 12 : type === 'Carvao' ? 8 : 4;
       const price = Math.round(base * (1 + bonus));
-      const row = document.createElement('div');
-      row.className = 'inv-row';
-      row.innerHTML = `
-        <div>
-          <strong>${type}</strong><br>
-          <span class="inv-row-meta">Material: ${count}</span>
-        </div>
-        <button ${count === 0 ? 'disabled' : ''}>Vender (R$ ${price})</button>
-      `;
-      row.querySelector('button').addEventListener('click', () => onSellProduct(type));
-      container.appendChild(row);
+      container.appendChild(renderInvRow({
+        title: type,
+        meta: `Material: ${count}`,
+        actions: [{
+          label: `Vender (R$ ${price})`,
+          disabled: count === 0,
+          onClick: () => onSellProduct(type)
+        }]
+      }));
     }
   }
 
   if (Array.isArray(state.weaponsOwned) && state.weaponsOwned.length) {
-    const names = { taco: 'Taco de madeira', machado: 'Machado', pistola: 'Pistola', espingarda: 'Espingarda' };
     state.weaponsOwned.forEach(id => {
-      const row = document.createElement('div');
-      row.className = 'inv-row';
       const equipped = state.equippedWeapon === id;
-      row.innerHTML = `
-        <div>
-          <strong>${names[id] || id}</strong><br>
-          <span class="inv-row-meta">${equipped ? 'Equipada' : 'Coletada — role o mouse para trocar'}</span>
-        </div>`;
-      container.appendChild(row);
+      container.appendChild(renderInvRow({
+        title: getWeaponDef(id).name,
+        meta: equipped ? 'Equipada' : 'Coletada — role o mouse para trocar'
+      }));
     });
   }
 
@@ -337,15 +449,8 @@ export function updateUpgradesUI(state) {
 export function updateWeaponHUD(state) {
   const nameEl = document.getElementById('weapon-name');
   if (!nameEl) return;
-  const names = {
-    fists: 'Punhos',
-    taco: 'Taco de madeira',
-    machado: 'Machado',
-    pistola: 'Pistola',
-    espingarda: 'Espingarda'
-  };
   const id = state.equippedWeapon || 'fists';
-  nameEl.textContent = names[id] || id;
+  nameEl.textContent = getWeaponDef(id).name;
   const ammoEl = document.getElementById('weapon-ammo');
   const def = getWeaponDef(id);
   if (ammoEl) {
@@ -453,7 +558,6 @@ export function showChapterIntro(goal) {
 
 export function showConfirmDialog({ title = 'Confirmar', message = 'Tem certeza?', confirmLabel = 'Confirmar', danger = true } = {}) {
   return new Promise((resolve) => {
-    const modal = document.getElementById('confirm-modal');
     const titleEl = document.getElementById('confirm-title');
     const msgEl = document.getElementById('confirm-message');
     const okBtn = document.getElementById('confirm-ok');
@@ -466,7 +570,7 @@ export function showConfirmDialog({ title = 'Confirmar', message = 'Tem certeza?
     okBtn.classList.toggle('title-btn-primary', !danger);
 
     const cleanup = (result) => {
-      modal.classList.add('hidden');
+      closeModal('confirm-modal');
       okBtn.onclick = null;
       cancelBtn.onclick = null;
       resolve(result);
@@ -474,6 +578,6 @@ export function showConfirmDialog({ title = 'Confirmar', message = 'Tem certeza?
 
     okBtn.onclick = () => cleanup(true);
     cancelBtn.onclick = () => cleanup(false);
-    modal.classList.remove('hidden');
+    openModal('confirm-modal');
   });
 }

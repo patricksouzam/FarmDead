@@ -5,6 +5,10 @@ import { avoidObstacles, getGroundHeightAt } from './world.js';
 import {
   ENEMY_CONTACT_DAMAGE, ENEMY_CONTACT_COOLDOWN_MS, ENEMY_AGGRO_RANGE, ENEMY_DEAGGRO_RANGE
 } from './gameState.js';
+import {
+  worldCapsule, capsulesOverlap, expandCapsule, hitboxForEnemyType,
+  playerHitbox, ENEMY_ATTACK_REACH
+} from './hitbox.js';
 
 let nextEnemyId = 1;
 
@@ -51,7 +55,6 @@ function buildZombie({ shirt, pants, skin, eyeEmissive, scale = 1, hunch = 0.22 
   const mesh = buildLowPolyHumanoid({
     shirt,
     pants,
-    skin,
     accessory: null,
     pose: 'standing',
     overalls: false
@@ -69,7 +72,7 @@ function buildWalker() {
   return buildZombie({
     shirt: 0x4a3a2c,
     pants: 0x2a2420,
-    skin: 0x7a9a6a,
+    skin: 0x4caf50,
     eyeEmissive: 0xff3a18,
     scale: 1,
     hunch: 0.22
@@ -80,7 +83,7 @@ function buildRunner() {
   return buildZombie({
     shirt: 0x3a2a22,
     pants: 0x1e1a16,
-    skin: 0x6a8a58,
+    skin: 0x3d9a45,
     eyeEmissive: 0xffc14a,
     scale: 0.94,
     hunch: 0.32
@@ -91,7 +94,7 @@ function buildBrute() {
   return buildZombie({
     shirt: 0x2c2018,
     pants: 0x1a1612,
-    skin: 0x5a6e4e,
+    skin: 0x2e7a38,
     eyeEmissive: 0xff2200,
     scale: 1.22,
     hunch: 0.12
@@ -102,7 +105,7 @@ function buildCrawler() {
   return buildZombie({
     shirt: 0x3a4a2c,
     pants: 0x24281c,
-    skin: 0x4a6a42,
+    skin: 0x267a32,
     eyeEmissive: 0xffe14a,
     scale: 0.92,
     hunch: 1.35
@@ -175,19 +178,21 @@ export function refreshEnemyHpBar(enemy, { show = false } = {}) {
   bar.userData.tex.needsUpdate = true;
 }
 
-export function spawnEnemy(scene, type, position, areaId) {
+export function spawnEnemy(scene, type, position, areaId, opts = {}) {
   const builder = ENEMY_BUILDERS[type] || ENEMY_BUILDERS.Zumbi;
   const mesh = builder();
   const groundY = getGroundHeightAt(position.x, position.z, areaId);
-  mesh.position.set(position.x, groundY, position.z);
+  mesh.position.set(position.x, position.y ?? groundY, position.z);
   mesh.userData.isEnemy = true;
   scene.add(mesh);
 
   const stats = ENEMY_STATS[type] || ENEMY_STATS.Zumbi;
   const hpBar = createHpBarSprite(type, mesh.scale.x || 1);
   mesh.add(hpBar);
+  const assignedId = opts.id != null ? opts.id : nextEnemyId++;
+  if (opts.id != null) nextEnemyId = Math.max(nextEnemyId, opts.id + 1);
   const enemy = {
-    id: nextEnemyId++,
+    id: assignedId,
     type,
     mesh,
     hp: stats.hp,
@@ -207,7 +212,8 @@ export function spawnEnemy(scene, type, position, areaId) {
     aggroRange: (ENEMY_AGGRO_MULT[type] ?? 1) * ENEMY_AGGRO_RANGE,
     deaggroRange: (ENEMY_AGGRO_MULT[type] ?? 1) * ENEMY_DEAGGRO_RANGE,
     hpBar,
-    hpBarTimer: 0
+    hpBarTimer: 0,
+    hitbox: hitboxForEnemyType(type)
   };
   mesh.userData.enemyRef = enemy;
   refreshEnemyHpBar(enemy);
@@ -219,20 +225,46 @@ function inSafeZone(pos, safeZone) {
   return Math.hypot(pos.x - safeZone.x, pos.z - safeZone.z) < safeZone.radius;
 }
 
-export function updateEnemyAI(enemy, delta, playerPos, areaId, safeZone, opts = {}) {
+function normalizeAiTargets(targetsOrPos, opts = {}) {
+  if (Array.isArray(targetsOrPos)) return targetsOrPos.filter(t => t?.pos);
+  if (!targetsOrPos) return [];
+  return [{ pos: targetsOrPos, crouched: !!opts.crouched, playerId: opts.playerId ?? 0 }];
+}
+
+function pickAiTarget(enemy, targets, safeZone) {
+  const mesh = enemy.mesh;
+  let best = null;
+  let bestDist = Infinity;
+  for (const target of targets) {
+    const dist = Math.hypot(target.pos.x - mesh.position.x, target.pos.z - mesh.position.z);
+    if (inSafeZone(target.pos, safeZone)) continue;
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = target;
+    }
+  }
+  return { target: best, dist: bestDist };
+}
+
+export function updateEnemyAI(enemy, delta, targetsOrPos, areaId, safeZone, opts = {}) {
   if (enemy.state === 'dead') return null;
   if (enemy.stagger > 0) {
     enemy.stagger -= delta;
     return null;
   }
   const mesh = enemy.mesh;
-
-  const distToPlayer = Math.hypot(playerPos.x - mesh.position.x, playerPos.z - mesh.position.z);
-  const playerSafe = inSafeZone(playerPos, safeZone);
+  const targets = normalizeAiTargets(targetsOrPos, opts);
+  const picked = pickAiTarget(enemy, targets, safeZone);
+  const target = picked.target;
+  const playerPos = target?.pos || { x: enemy.homeX, z: enemy.homeZ };
+  const distToPlayer = target ? picked.dist : Infinity;
+  const playerSafe = !target;
+  const crouched = !!(target?.crouched ?? opts.crouched);
   const baseAggro = enemy.aggroRange ?? ENEMY_AGGRO_RANGE;
   const baseDeaggro = enemy.deaggroRange ?? ENEMY_DEAGGRO_RANGE;
-  const aggro = (opts.crouched ? baseAggro * 0.62 : baseAggro);
-  const deaggro = opts.crouched ? baseDeaggro * 0.85 : baseDeaggro;
+  const aggro = (crouched ? baseAggro * 0.62 : baseAggro);
+  const deaggro = crouched ? baseDeaggro * 0.85 : baseDeaggro;
+  enemy.aggroPlayerId = target?.playerId ?? 0;
 
   if (enemy.state === 'patrolling' || enemy.state === 'chasing') {
     if (distToPlayer < aggro && !playerSafe) {
@@ -275,8 +307,9 @@ export function updateEnemyAI(enemy, delta, playerPos, areaId, safeZone, opts = 
   }
 
   if (enemy.state === 'chasing') {
-    const meleeRange = enemy.type === 'ZumbiBruto' ? 1.45 : 1.25;
-    if (distToPlayer <= meleeRange) {
+    const eCap = expandCapsule(worldCapsule(mesh.position, enemy.hitbox || hitboxForEnemyType(enemy.type)), ENEMY_ATTACK_REACH);
+    const pCap = worldCapsule(playerPos, playerHitbox(crouched));
+    if (capsulesOverlap(eCap, pCap)) {
       enemy.state = 'attacking';
       return null;
     }
@@ -298,15 +331,17 @@ export function updateEnemyAI(enemy, delta, playerPos, areaId, safeZone, opts = 
     const dx = playerPos.x - mesh.position.x;
     const dz = playerPos.z - mesh.position.z;
     mesh.rotation.y = Math.atan2(dx, dz);
-    const meleeRange = enemy.type === 'ZumbiBruto' ? 1.45 : 1.25;
-    if (distToPlayer > meleeRange * 1.35) {
+    const eCap = expandCapsule(worldCapsule(mesh.position, enemy.hitbox || hitboxForEnemyType(enemy.type)), ENEMY_ATTACK_REACH);
+    const pCap = worldCapsule(playerPos, playerHitbox(crouched));
+    const leaveCap = expandCapsule(pCap, 0.35);
+    if (!capsulesOverlap(eCap, leaveCap)) {
       enemy.state = 'chasing';
       return null;
     }
     const now = Date.now();
     if (now - enemy.lastAttackTime >= ENEMY_CONTACT_COOLDOWN_MS) {
       enemy.lastAttackTime = now;
-      return 'attack';
+      return { type: 'attack', playerId: target?.playerId ?? enemy.aggroPlayerId ?? 0 };
     }
   }
 
@@ -399,4 +434,52 @@ export function removeEnemy(scene, enemies, enemy) {
   else if (scene) scene.remove(enemy.mesh);
   const idx = enemies.indexOf(enemy);
   if (idx >= 0) enemies.splice(idx, 1);
+}
+
+export function syncEnemiesFromSnapshot(root, enemies, snaps, areaId) {
+  const seen = new Set();
+  for (const snap of snaps || []) {
+    seen.add(snap.id);
+    let enemy = enemies.find(e => e.id === snap.id);
+    if (!enemy) {
+      enemy = spawnEnemy(root, snap.type, { x: snap.x, y: snap.y, z: snap.z }, areaId, { id: snap.id });
+      enemies.push(enemy);
+    }
+    const pos = enemy.mesh.position;
+    enemy.netFrom = { x: pos.x, y: pos.y, z: pos.z, yaw: enemy.mesh.rotation.y };
+    enemy.netTo = { x: snap.x, y: snap.y, z: snap.z, yaw: snap.yaw || 0 };
+    enemy.netT = 0;
+    enemy.hp = snap.hp;
+    if (snap.maxHp) enemy.maxHp = snap.maxHp;
+    if (snap.state === 'dead' && enemy.state !== 'dead') poseEnemyCorpse(enemy);
+    else if (snap.state && snap.state !== 'dead') enemy.state = snap.state;
+    refreshEnemyHpBar(enemy, { show: enemy.state === 'chasing' || enemy.state === 'attacking' });
+  }
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    if (!seen.has(enemies[i].id)) removeEnemy(root, enemies, enemies[i]);
+  }
+}
+
+export function interpolateNetEnemies(enemies, delta, interval) {
+  const step = interval > 0 ? delta / interval : 1;
+  for (const enemy of enemies) {
+    if (!enemy.netTo || enemy.state === 'dead') {
+      animateEnemy(enemy, delta);
+      continue;
+    }
+    enemy.netT = Math.min(1, (enemy.netT || 0) + step);
+    const t = enemy.netT;
+    const a = enemy.netFrom;
+    const b = enemy.netTo;
+    if (a && b) {
+      enemy.mesh.position.x = a.x + (b.x - a.x) * t;
+      enemy.mesh.position.y = a.y + (b.y - a.y) * t;
+      enemy.mesh.position.z = a.z + (b.z - a.z) * t;
+      let dyaw = b.yaw - a.yaw;
+      while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+      while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+      enemy.mesh.rotation.y = a.yaw + dyaw * t;
+    }
+    animateEnemy(enemy, delta);
+  }
 }

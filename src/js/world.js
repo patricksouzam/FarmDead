@@ -8,6 +8,7 @@ import { voxelBox, voxelStairRoof, buildVoxelTree, buildVoxelCloud, voxelMat } f
 import { createTerrainForArea } from './terrain/terrainMesh.js';
 import { getGroundHeightAt, FARM_BASE_HEIGHT, setFarmPlotBounds } from './terrain/heightmap.js';
 import { getMap, parseColor } from './mapLoader.js';
+import { createLantern } from './lighting.js';
 
 // Altura andável do terreno plano da fazenda — MESMA convenção de
 // getGroundHeightAt/placeOnTerrain (FARM_BASE_HEIGHT + 1, topo do bloco +1,
@@ -680,53 +681,7 @@ export function applyWindEffects({ wind, treesGroup, grassGroup, windmill, cloud
   }
 }
 
-export function createLights(scene) {
-  // Ambient/hemisférico um pouco mais fortes que antes para preencher as
-  // sombras com luz colorida do céu/chão em vez de ficarem quase pretas,
-  // mantendo o sol como a principal fonte de volume e sombra projetada.
-  const ambientLight = new THREE.AmbientLight(0xdfe8ff, 0.38);
-  scene.add(ambientLight);
-
-  const hemiLight = new THREE.HemisphereLight(0xcfe8ff, 0x6a8a46, 0.5);
-  scene.add(hemiLight);
-
-  const sunLight = new THREE.DirectionalLight(0xfff0c8, 3.2);
-  sunLight.position.set(30, 40, 20);
-  sunLight.castShadow = true;
-  sunLight.shadow.mapSize.set(2048, 2048);
-  sunLight.shadow.camera.near = 1;
-  sunLight.shadow.camera.far = 140;
-  const d = 40;
-  sunLight.shadow.camera.left = -d;
-  sunLight.shadow.camera.right = d;
-  sunLight.shadow.camera.top = d;
-  sunLight.shadow.camera.bottom = -d;
-  sunLight.shadow.bias = -0.0015;
-  sunLight.shadow.radius = 1.8;
-  scene.add(sunLight);
-
-  // Luz de preenchimento fria e fraca, oposta ao sol: suaviza o lado escuro
-  // dos volumes sem apagar as sombras projetadas.
-  const fillLight = new THREE.DirectionalLight(0xaecdff, 0.28);
-  fillLight.position.set(-25, 18, -18);
-  scene.add(fillLight);
-
-  const moonLight = new THREE.DirectionalLight(0xb8c8ff, 0);
-  moonLight.position.set(-30, 40, -20);
-  moonLight.castShadow = true;
-  moonLight.shadow.mapSize.set(2048, 2048);
-  moonLight.shadow.camera.near = 1;
-  moonLight.shadow.camera.far = 140;
-  moonLight.shadow.camera.left = -d;
-  moonLight.shadow.camera.right = d;
-  moonLight.shadow.camera.top = d;
-  moonLight.shadow.camera.bottom = -d;
-  moonLight.shadow.bias = -0.0015;
-  moonLight.shadow.radius = 2;
-  scene.add(moonLight);
-
-  return { ambientLight, hemiLight, sunLight, moonLight, fillLight };
-}
+export { createLighting as createLights } from './lighting.js';
 
 export function createGround(scene, worldSeed = 12345) {
   const size = 90; // colar/coleção decorativa (montanhas etc.) mantém o raio visual original
@@ -1091,7 +1046,7 @@ export function createFences(scene, boundsX, boundsZ, opts = {}) {
       const lantern = voxelBox(0.14, 0.18, 0.14, lanternGlassMat);
       lantern.position.set(x, FARM_TERRAIN_TOP_Y + 1.72, z);
       group.add(lantern);
-      const lanternLight = new THREE.PointLight(0xffc878, 0.9, 7, 1.8);
+      const { light: lanternLight } = createLantern({ color: 0xffc878, intensity: 0.9, range: 7, decay: 1.8 });
       lanternLight.position.copy(lantern.position);
       group.add(lanternLight);
     });
@@ -1497,7 +1452,16 @@ export function buildHouse(group, level) {
   lanternGroup.add(cage);
   const lanternGlass = voxelBox(0.12, 0.14, 0.12, lanternGlassMat);
   lanternGroup.add(lanternGlass);
-  const lanternLight = new THREE.PointLight(0xffc878, 0, 12, 1.7);
+  const { light: lanternLight } = createLantern({
+    color: 0xffc878,
+    intensity: 0,
+    range: 12,
+    decay: 1.7,
+    nightOnly: true,
+    nightIntensity: 2.4,
+    glassMat: lanternGlassMat,
+    glassEmissive: 1.6
+  });
   lanternGroup.add(lanternLight);
   lanternGroup.position.set(-width / 4, height * 0.7, depth / 2 + porchDepth - 0.2);
   group.add(lanternGroup);
@@ -2133,7 +2097,7 @@ export function createVillage(parent) {
     const bulb = voxelBox(0.32, 0.32, 0.32, lampGlow);
     bulb.position.y = 2.9;
     lamp.add(bulb);
-    const light = new THREE.PointLight(0xffc878, 1.65, 11, 1.6);
+    const { light } = createLantern({ color: 0xffc878, intensity: 1.65, range: 11, decay: 1.6 });
     light.position.y = 2.85;
     lamp.add(light);
     placeOnTerrain(lamp, x, z, 'farm');
@@ -2233,7 +2197,7 @@ export function createNightClutter(parent) {
     const glow = voxelBox(0.22, 0.22, 0.22, mat(0xffe08a, { emissive: 0xffc14a, emissiveIntensity: 1.2 }));
     glow.position.y = 1.65;
     lantern.add(glow);
-    const light = new THREE.PointLight(0xffc878, 1.1, 7.5, 1.8);
+    const { light } = createLantern({ color: 0xffc878, intensity: 1.1, range: 7.5, decay: 1.8 });
     light.position.y = 1.6;
     lantern.add(light);
     placeOnTerrain(lantern, x, z, 'farm');
